@@ -1,0 +1,9 @@
+# Cross-origin isolation enables SharedArrayBuffer, which ONNX Runtime Web uses
+# for multi-threaded WASM inference during background removal. WebGPU works
+# without these headers; they are a progressive enhancement.
+#
+# This file uses the Netlify / Cloudflare Pages headers format. For other hosts
+# set the equivalent response headers (see SvelteKit adapter docs).
+/*
+  Cross-Origin-Opener-Policy: same-origin
+  Cross-Origin-Embedder-Policy: credentialless

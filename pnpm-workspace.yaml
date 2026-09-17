@@ -1,0 +1,4 @@
+# protobufjs ships a postinstall step required by onnxruntime-web (used for
+# in-browser background removal). Approve it under pnpm's build sandbox.
+allowBuilds:
+  protobufjs: true
