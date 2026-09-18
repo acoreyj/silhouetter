@@ -24,30 +24,101 @@ export {
 };
 export type { Canvas2D };
 
+export interface AlphaMaskOptions {
+	/** Alpha at or above this value (0-255) is kept as subject. */
+	threshold?: number;
+	/** Erode the kept region by this many pixels to shed soft edge fringes. */
+	erodePx?: number;
+}
+
+/**
+ * Alpha cutoff that drops the near-transparent fringes left by the segmentation
+ * model. A half-alpha cut keeps the solid subject while discarding the greys
+ * that survive in tight gaps (neck/leg recesses and the like).
+ */
+export const DEFAULT_ALPHA_THRESHOLD = 128;
+/**
+ * Pixels of edge erosion applied after thresholding. One pixel is enough to
+ * break the thin, low-alpha bridges that otherwise leave white halos in narrow
+ * gaps, without noticeably eating the subject at source resolution.
+ */
+export const DEFAULT_MASK_ERODE_PX = 1;
+
+/** Erode a binary mask by `radius` pixels using a separable square kernel. */
+function erodeBinary(mask: Uint8Array, width: number, height: number, radius: number): Uint8Array {
+	const horizontal = new Uint8Array(mask.length);
+	for (let y = 0; y < height; y++) {
+		const row = y * width;
+		for (let x = 0; x < width; x++) {
+			let keep = 1;
+			for (let nx = x - radius; nx <= x + radius && keep; nx++) {
+				if (nx < 0 || nx >= width || !mask[row + nx]) keep = 0;
+			}
+			horizontal[row + x] = keep;
+		}
+	}
+	const out = new Uint8Array(mask.length);
+	for (let y = 0; y < height; y++) {
+		for (let x = 0; x < width; x++) {
+			let keep = 1;
+			for (let ny = y - radius; ny <= y + radius && keep; ny++) {
+				if (ny < 0 || ny >= height || !horizontal[ny * width + x]) keep = 0;
+			}
+			out[y * width + x] = keep;
+		}
+	}
+	return out;
+}
+
+/**
+ * Clean an RGBA buffer's alpha channel into a binary keep mask in place: kept
+ * pixels become opaque black, discarded pixels fully transparent. Pixels below
+ * the threshold are dropped, then the kept region is eroded so thin fringes are
+ * removed before the mask is traced or composited.
+ */
+export function cleanAlphaMask(
+	data: Uint8ClampedArray,
+	width: number,
+	height: number,
+	{
+		threshold = DEFAULT_ALPHA_THRESHOLD,
+		erodePx = DEFAULT_MASK_ERODE_PX,
+	}: AlphaMaskOptions = {},
+): void {
+	const count = width * height;
+	let keep: Uint8Array = new Uint8Array(count);
+	for (let p = 0; p < count; p++) {
+		keep[p] = data[p * 4 + 3] >= threshold ? 1 : 0;
+	}
+	const radius = Math.max(0, Math.round(erodePx));
+	if (radius > 0) keep = erodeBinary(keep, width, height, radius);
+	for (let p = 0; p < count; p++) {
+		const i = p * 4;
+		if (keep[p]) {
+			data[i] = 0;
+			data[i + 1] = 0;
+			data[i + 2] = 0;
+			data[i + 3] = 255;
+		} else {
+			data[i + 3] = 0;
+		}
+	}
+}
+
 /**
  * Build an aligned alpha mask for a source image. Pixels at or above the alpha
- * threshold become opaque black, everything else becomes transparent.
+ * threshold become opaque black, everything else becomes transparent; the kept
+ * region is then eroded by {@link AlphaMaskOptions.erodePx} pixels.
  */
 export function buildAlphaMask(
 	source: HTMLImageElement,
-	threshold = 8,
+	options: AlphaMaskOptions = {},
 ): { canvas: Canvas2D; dataUrl: string } {
 	const canvas = createCanvas(source.naturalWidth, source.naturalHeight);
 	const ctx = get2d(canvas, true);
 	ctx.drawImage(source, 0, 0);
 	const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-	const d = imageData.data;
-	for (let i = 0; i < d.length; i += 4) {
-		const a = d[i + 3];
-		if (a >= threshold) {
-			d[i] = 0;
-			d[i + 1] = 0;
-			d[i + 2] = 0;
-			d[i + 3] = 255;
-		} else {
-			d[i + 3] = 0;
-		}
-	}
+	cleanAlphaMask(imageData.data, canvas.width, canvas.height, options);
 	ctx.putImageData(imageData, 0, 0);
 	return { canvas, dataUrl: canvasToDataUrl(canvas) };
 }

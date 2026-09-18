@@ -9,9 +9,20 @@ import {
 	invalidateMask,
 } from './state.svelte';
 import { newId } from './doc.svelte';
-import type { ImageLayer, Layer, MaskLayer, MaskStroke, MaskableLayer, SubjectLayer } from './types';
+import type {
+	ImageLayer,
+	Layer,
+	MaskLayer,
+	MaskStroke,
+	MaskStrokeMode,
+	MaskableLayer,
+	Point,
+	SubjectLayer,
+} from './types';
 import { createCanvas, get2d, probeImage, renderArtwork, canvasToPngBytes } from './image/ops';
+import { floodSelect } from './image/magic';
 import { drawInPixelSpace } from './geometry/transform';
+import { halfPlanePolygon } from './geometry/slice';
 import { segmentForeground, type SegmentProgress } from './segment/segment';
 import { traceMask } from './vector/trace';
 import { THRESHOLD_AUTO } from '@cadit-app/potrace-ts';
@@ -131,6 +142,9 @@ export async function segmentLayer(layerId: string, onProgress?: SegmentProgress
 	// removed background can then be carved out of every layer at once.
 	const subject = store.doc.layers.find((l) => l.id === layerId);
 	ensureMaskLayer(subject);
+	// Creating the mask layer selects it; keep the subject selected so it can be
+	// dragged straight away even though the mask sits on top.
+	store.selectedId = layerId;
 
 	const updated = store.doc.layers.find((l) => l.id === layerId);
 	if (!updated) throw new Error('Layer disappeared during segmentation');
@@ -237,6 +251,137 @@ export async function addMaskStroke(layerId: string, stroke: MaskStroke): Promis
 	await refreshMaskLayer(layerId);
 }
 
+/** The result of a magic-eraser flood fill, in the subject's source pixels. */
+export interface MagicEraseRegion {
+	/** Closed outline of the region that would be erased. */
+	polygons: Point[][];
+	/** Pixels the region covers. */
+	count: number;
+	/** Pixels currently kept in the subject mask (the region cannot exceed this). */
+	total: number;
+}
+
+/**
+ * Compute the magic-eraser region for a click without changing anything, so the
+ * editor can preview it on hover. The flood is restricted to pixels currently
+ * kept in the subject mask, so it can never leak across transparent gaps and
+ * wipe the layer.
+ */
+export async function computeMagicEraseRegion(
+	layerId: string,
+	sourcePoint: Point,
+	tolerance: number,
+): Promise<MagicEraseRegion | undefined> {
+	const layer = store.doc.layers.find((l) => l.id === layerId);
+	if (!layer || layer.kind !== 'subject') return undefined;
+	const source = getSource(layer.sourceId);
+	if (!source) return undefined;
+
+	const width = source.naturalWidth;
+	const height = source.naturalHeight;
+
+	// Only pixels that are part of the current subject may be erased.
+	const mask = (await applyMaskStrokes(layer)) ?? getMask(layer.id);
+	if (!mask) return undefined;
+	const maskCanvas = createCanvas(width, height);
+	const maskCtx = get2d(maskCanvas, true);
+	maskCtx.drawImage(mask, 0, 0, width, height);
+	const alpha = maskCtx.getImageData(0, 0, width, height).data;
+	const within = new Uint8Array(width * height);
+	let total = 0;
+	for (let p = 0; p < within.length; p++) {
+		if (alpha[p * 4 + 3] > 0) {
+			within[p] = 1;
+			total++;
+		}
+	}
+	if (total === 0) return undefined;
+
+	const canvas = createCanvas(width, height);
+	const ctx = get2d(canvas, true);
+	ctx.drawImage(source, 0, 0);
+	const image = ctx.getImageData(0, 0, width, height);
+	const region = floodSelect(image.data, width, height, sourcePoint, { tolerance, within });
+	if (!region || region.count === 0) return undefined;
+
+	// Trace only the region's bounding box for speed, then offset the polygons
+	// back into full-image coordinates.
+	const rw = region.maxX - region.minX;
+	const rh = region.maxY - region.minY;
+	const regionCanvas = createCanvas(rw, rh);
+	const rctx = get2d(regionCanvas, true);
+	const regionImage = rctx.createImageData(rw, rh);
+	for (let y = 0; y < rh; y++) {
+		for (let x = 0; x < rw; x++) {
+			if (!region.mask[(y + region.minY) * width + (x + region.minX)]) continue;
+			regionImage.data[(y * rw + x) * 4 + 3] = 255;
+		}
+	}
+	rctx.putImageData(regionImage, 0, 0);
+	const polygons = traceMask(regionCanvas, {
+		turdsize: 0,
+		alphamax: 1.334,
+		optcurve: true,
+		threshold: 128,
+	}).map((poly) => poly.map((p) => ({ x: p.x + region.minX, y: p.y + region.minY })));
+	if (polygons.length === 0) return undefined;
+
+	return { polygons, count: region.count, total };
+}
+
+/**
+ * Magic eraser: flood-fill the 4-connected pixels around `sourcePoint` that are
+ * within `tolerance` of its colour, then erase that region from a subject
+ * layer's keep mask. The region is traced to polygons and stored as a fill
+ * edit, so it composes with brush strokes, stays undoable and re-traces the cut.
+ */
+export async function magicEraseAt(
+	layerId: string,
+	sourcePoint: Point,
+	tolerance: number,
+): Promise<void> {
+	const layer = store.doc.layers.find((l) => l.id === layerId);
+	if (!layer || layer.kind !== 'subject') {
+		throw new Error('Select a traced (subject) layer for the magic eraser.');
+	}
+	const region = await computeMagicEraseRegion(layerId, sourcePoint, tolerance);
+	if (!region) return;
+	await addMaskStroke(layerId, {
+		mode: 'erase',
+		radiusPx: 0,
+		points: [],
+		fillPolygons: region.polygons,
+	});
+}
+
+/**
+ * Slice a maskable layer along the line from `p0` to `p1` (in the layer's mask
+ * pixel space): erase everything on `side` of the line (`1` or `-1`) from a
+ * subject's keep mask, or punch it out of a mask layer. Stored as a fill edit,
+ * so it stays compact, composes with brush strokes and re-traces the cut.
+ */
+export async function sliceMask(
+	layerId: string,
+	p0: Point,
+	p1: Point,
+	side: number,
+	mode: MaskStrokeMode,
+): Promise<void> {
+	const layer = store.doc.layers.find((l) => l.id === layerId);
+	if (!layer || (layer.kind !== 'subject' && layer.kind !== 'mask')) {
+		throw new Error('Select a subject or mask layer to slice.');
+	}
+	const size = maskPixelSize(layer);
+	const polygon = halfPlanePolygon(p0, p1, side, size);
+	if (polygon.length === 0) return;
+	await addMaskStroke(layerId, {
+		mode,
+		radiusPx: 0,
+		points: [],
+		fillPolygons: [polygon],
+	});
+}
+
 /** Remove all brush strokes from a subject's mask or a mask layer. */
 export async function clearMaskStrokes(layerId: string): Promise<void> {
 	const layer = store.doc.layers.find((l) => l.id === layerId);
@@ -255,22 +400,25 @@ async function refreshMaskLayer(layerId: string): Promise<void> {
 		if (layer.kind === 'mask') await applyMaskLayer(layer);
 		else await applyMaskStrokes(layer);
 	}
-	await retraceSubjects();
+	// The caller already committed the edit; fold the re-trace into that same
+	// undo step so one Undo reverts the whole action.
+	await retraceSubjects(false);
 }
 
 /** Re-trace every subject layer so its cut line follows the current masks. */
-export async function retraceSubjects(): Promise<void> {
+export async function retraceSubjects(history = true): Promise<void> {
 	for (const layer of store.doc.layers) {
-		if (layer.kind === 'subject' && layer.maskDataUrl) await retraceLayer(layer.id);
+		if (layer.kind === 'subject' && layer.maskDataUrl) await retraceLayer(layer.id, history);
 	}
 }
 
 /**
  * Re-trace a subject layer's outline from its stored mask using the layer's
  * current threshold and despeckle settings. Cheap enough to run on demand
- * since it does not re-run the segmentation model.
+ * since it does not re-run the segmentation model. Pass `history: false` to
+ * mutate without adding a separate undo step.
  */
-export async function retraceLayer(layerId: string): Promise<void> {
+export async function retraceLayer(layerId: string, history = true): Promise<void> {
 	const layer = store.doc.layers.find((l) => l.id === layerId);
 	if (!layer || layer.kind !== 'subject') throw new Error('Select a traced layer first.');
 
@@ -281,7 +429,8 @@ export async function retraceLayer(layerId: string): Promise<void> {
 		threshold: layer.traceAutoThreshold ? THRESHOLD_AUTO : layer.traceThreshold,
 	});
 
-	store.updateLayer(layerId, { cutPolygons: polygons } as Partial<Layer>);
+	if (history) store.updateLayer(layerId, { cutPolygons: polygons } as Partial<Layer>);
+	else layer.cutPolygons = polygons;
 }
 
 export interface ExportFlags {

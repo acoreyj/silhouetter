@@ -55,9 +55,16 @@ import → segment → export run), see [`docs/chrome.md`](docs/chrome.md).
 2. **Remove background** — on a selected layer, runs the segmentation model locally
    and promotes the layer to a _subject_ layer with an alpha mask and a traced cut
    outline. The first run downloads the model (~40 MB, cached afterwards).
-3. **Edit the mask** (optional) — toggle **Paint mask** and brush to _Erase_ or
-   _Restore_ parts of the mask (e.g. keep only a head). Edits are stored as strokes
-   and applied on top of the segmentation mask.
+3. **Edit the mask** (optional) — toggle **Edit mask** and pick the **Brush** tool
+   to _Erase_ or _Restore_ parts of the mask (e.g. keep only a head), the
+   **Magic eraser** tool to hover over a colour and erase the connected region
+   (e.g. white left in a tight gap), or the **Slice** tool to drag a straight
+   line and cut away everything on one side (e.g. level a ragged neck). The
+   magic eraser only removes pixels that are currently part of the subject, so
+   it cannot leak into the background, and it previews the region in red before
+   you click. The slice previews the removed half in red and snaps to
+   horizontal/vertical/45° while Shift is held; **Flip side** chooses which half
+   goes. Each edit is one undo step.
 4. **Adjust the cut** — _Expand_ (mm) grows the outline, _Smoothing_ rounds sharp
    corners. Both update the preview live.
 5. **Re-trace** — tune _Threshold_ (or auto/Otsu) and _Despeckle_, then click
@@ -121,6 +128,7 @@ src/lib/
   actions.ts          import, segment, mask strokes, re-trace, export actions
   image/canvas.ts     leaf canvas helpers (no project imports)
   image/ops.ts        flatten at DPI, mask compositing, bleed, shape clip
+  image/magic.ts      magic-eraser colour flood fill
   geometry/transform.ts  source/layer/page point mapping
   geometry/shape.ts   bookmark base + derived document trim outline
   segment/segment.ts  background-removal wrapper

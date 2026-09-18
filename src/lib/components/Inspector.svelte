@@ -17,6 +17,11 @@
 		layer && (layer.kind === 'subject' || layer.kind === 'mask') ? layer.maskStrokes.length : 0,
 	);
 
+	// The magic eraser samples image colours, so it is only offered for subjects.
+	$effect(() => {
+		if (layer?.kind === 'mask' && brush.tool === 'magic') brush.tool = 'brush';
+	});
+
 	let tracing = $state(false);
 	let traceError = $state('');
 
@@ -217,13 +222,37 @@
 					/>
 				</label>
 				<label>
-					Corner radius (mm)
+					Bottom radius (mm)
 					<input
 						type="number"
 						min="0"
 						step="0.5"
 						value={store.doc.bookmark.cornerRadiusMm}
 						onchange={(e) => updateBookmark({ cornerRadiusMm: Number(e.currentTarget.value) })}
+					/>
+				</label>
+			</div>
+			<div class="row">
+				<label>
+					Top-left radius (mm)
+					<input
+						type="number"
+						min="0"
+						step="0.5"
+						value={store.doc.bookmark.cornerRadiusTopLeftMm ?? 0}
+						onchange={(e) =>
+							updateBookmark({ cornerRadiusTopLeftMm: Number(e.currentTarget.value) })}
+					/>
+				</label>
+				<label>
+					Top-right radius (mm)
+					<input
+						type="number"
+						min="0"
+						step="0.5"
+						value={store.doc.bookmark.cornerRadiusTopRightMm ?? 0}
+						onchange={(e) =>
+							updateBookmark({ cornerRadiusTopRightMm: Number(e.currentTarget.value) })}
 					/>
 				</label>
 			</div>
@@ -520,19 +549,48 @@
 
 				<h3>Mask brush</h3>
 				<button class:active={brush.active} onclick={() => (brush.active = !brush.active)}>
-					{brush.active ? 'Stop painting' : 'Paint mask'}
+					{brush.active ? 'Stop editing' : 'Edit mask'}
 				</button>
 				<div class="row">
 					<label>
-						Mode
+						Tool
 						<select
-							value={brush.mode}
-							onchange={(e) => (brush.mode = e.currentTarget.value as 'erase' | 'restore')}
+							value={brush.tool}
+							onchange={(e) =>
+								(brush.tool = e.currentTarget.value as 'brush' | 'magic' | 'slice')}
 						>
-							<option value="erase">Erase</option>
-							<option value="restore">Restore</option>
+							<option value="brush">Brush</option>
+							<option value="magic">Magic eraser</option>
+							<option value="slice">Slice (straight line)</option>
 						</select>
 					</label>
+					{#if brush.tool === 'magic'}
+						<label>
+							Tolerance
+							<input
+								type="range"
+								min="0"
+								max="120"
+								step="1"
+								value={brush.tolerance}
+								oninput={(e) => (brush.tolerance = Number(e.currentTarget.value))}
+							/>
+							<span class="value">{brush.tolerance}</span>
+						</label>
+					{:else}
+						<label>
+							Mode
+							<select
+								value={brush.mode}
+								onchange={(e) => (brush.mode = e.currentTarget.value as 'erase' | 'restore')}
+							>
+								<option value="erase">Erase</option>
+								<option value="restore">Restore</option>
+							</select>
+						</label>
+					{/if}
+				</div>
+				{#if brush.tool === 'brush'}
 					<label>
 						Size (mm)
 						<input
@@ -544,9 +602,24 @@
 							oninput={(e) => (brush.radiusMm = Number(e.currentTarget.value))}
 						/>
 					</label>
-				</div>
+				{:else if brush.tool === 'slice'}
+					<button onclick={() => (brush.sliceSide = brush.sliceSide === 1 ? -1 : 1)}>
+						Flip side ({brush.sliceSide === 1 ? 'A' : 'B'})
+					</button>
+					<p class="hint">
+						Drag a straight line across the layer; everything on the red-shaded side is removed
+						(Erase) or added back (Restore). Hold Shift to snap the line level. Use Flip side to
+						choose which half goes, then Re-trace outline.
+					</p>
+				{:else}
+					<p class="hint">
+						Hover the canvas to preview the region (red), then click to erase it. Only currently
+						kept pixels are affected, so it will not leak into the background. Undo with
+						Ctrl/Cmd+Z.
+					</p>
+				{/if}
 				<button onclick={onClearStrokes} disabled={maskStrokeCount === 0}>
-					Clear brush edits ({maskStrokeCount})
+					Clear mask edits ({maskStrokeCount})
 				</button>
 				<p class="hint">
 					Paint the mask, then Re-trace outline to update the cut and bookmark shape.
@@ -563,6 +636,16 @@
 				</button>
 				<div class="row">
 					<label>
+						Tool
+						<select
+							value={brush.tool}
+							onchange={(e) => (brush.tool = e.currentTarget.value as 'brush' | 'slice')}
+						>
+							<option value="brush">Brush</option>
+							<option value="slice">Slice (straight line)</option>
+						</select>
+					</label>
+					<label>
 						Brush
 						<select
 							value={brush.mode}
@@ -572,6 +655,16 @@
 							<option value="restore">Add</option>
 						</select>
 					</label>
+				</div>
+				{#if brush.tool === 'slice'}
+					<button onclick={() => (brush.sliceSide = brush.sliceSide === 1 ? -1 : 1)}>
+						Flip side ({brush.sliceSide === 1 ? 'A' : 'B'})
+					</button>
+					<p class="hint">
+						Drag a straight line; the red-shaded side is punched out of every layer (Subtract)
+						or filled back in (Add). Hold Shift to snap the line level.
+					</p>
+				{:else}
 					<label>
 						Size (mm)
 						<input
@@ -583,9 +676,9 @@
 							oninput={(e) => (brush.radiusMm = Number(e.currentTarget.value))}
 						/>
 					</label>
-				</div>
+				{/if}
 				<button onclick={onClearStrokes} disabled={maskStrokeCount === 0}>
-					Clear brush edits ({maskStrokeCount})
+					Clear mask edits ({maskStrokeCount})
 				</button>
 				<p class="hint">
 					Subtract punches a hole through all layers; Add fills it back in. The cut line follows

@@ -2,19 +2,30 @@
 	import { Stage, Layer, Rect, Path, Transformer, Line, Circle } from 'svelte-konva';
 	import type Konva from 'konva';
 	import { store, getSource, brush, maskPixelSize } from '$lib/state.svelte';
-	import { addMaskStroke } from '$lib/actions';
+	import {
+		addMaskStroke,
+		magicEraseAt,
+		computeMagicEraseRegion,
+		sliceMask,
+		type MagicEraseRegion,
+	} from '$lib/actions';
 	import { buildMarkSet, computeMedia, markSetToPath, type MarkSet } from '$lib/marks';
 	import { buildTrimPolygons, polygonsBounds } from '$lib/geometry/shape';
-	import { pagePointToLayerLocal } from '$lib/geometry/transform';
+	import { halfPlanePolygon, snapLine } from '$lib/geometry/slice';
+	import { pagePointToLayerLocal, polygonsToMm, transformPolygonsToPage } from '$lib/geometry/transform';
 	import { polygonsToSvgPath } from '$lib/vector/trace';
-	import type { MaskLayer, MaskableLayer, Point } from '$lib/types';
+	import type { MaskLayer, MaskableLayer, Point, SubjectLayer } from '$lib/types';
+	import { applyNodeOrder } from './layerOrder';
 	import LayerNode from './LayerNode.svelte';
 	import MaskNode from './MaskNode.svelte';
 
 	let zoom = $state(3);
 	let transformer = $state<{ node: Konva.Transformer } | undefined>(undefined);
 	let stage = $state<{ node: Konva.Stage } | undefined>(undefined);
+	let canvasLayer = $state<{ node: Konva.Layer } | undefined>(undefined);
 	const nodeMap = new Map<string, Konva.Group>();
+	const containerMap = new Map<string, Konva.Group>();
+	let containerRevision = $state(0);
 
 	const marks = $derived.by<MarkSet>(() => buildMarkSet(store.doc));
 	const trimPolygons = $derived.by(() => buildTrimPolygons(store.doc, getSource));
@@ -66,7 +77,29 @@
 	);
 
 	const brushLayer = $derived.by<MaskableLayer | undefined>(() => {
-		if (!brush.active) return undefined;
+		if (!brush.active || brush.tool !== 'brush') return undefined;
+		const selected = store.selected;
+		if (!selected) return undefined;
+		if (selected.kind === 'mask') return selected;
+		if (selected.kind !== 'subject' || !selected.maskDataUrl) return undefined;
+		if (!getSource(selected.sourceId)) return undefined;
+		return selected;
+	});
+
+	// The magic eraser samples the source image's colours, so it only applies to
+	// a traced (subject) layer.
+	const magicLayer = $derived.by<SubjectLayer | undefined>(() => {
+		if (!brush.active || brush.tool !== 'magic') return undefined;
+		const selected = store.selected;
+		if (!selected || selected.kind !== 'subject' || !selected.maskDataUrl) return undefined;
+		if (!getSource(selected.sourceId)) return undefined;
+		return selected;
+	});
+
+	// The slice tool cuts a straight edge into whichever subject or mask layer is
+	// selected.
+	const sliceLayer = $derived.by<MaskableLayer | undefined>(() => {
+		if (!brush.active || brush.tool !== 'slice') return undefined;
 		const selected = store.selected;
 		if (!selected) return undefined;
 		if (selected.kind === 'mask') return selected;
@@ -76,9 +109,36 @@
 	});
 
 	function registerNode(id: string, node: Konva.Group) {
+		if (nodeMap.get(id) === node) return;
 		nodeMap.set(id, node);
 		if (store.selectedId === id) syncTransformer(id);
 	}
+
+	function registerContainer(id: string, node: Konva.Group) {
+		// Registering the same node again (the container effect can re-run when
+		// props change identity) must not bump the revision, or the reorder effect
+		// below re-renders the parent and re-triggers the effect in a loop.
+		if (containerMap.get(id) === node) return;
+		containerMap.set(id, node);
+		containerRevision++;
+	}
+
+	// `svelte-konva` appends each layer's node to the Konva layer once, at mount;
+	// reordering the `{#each}` (bring forward / send backward) moves the Svelte
+	// components but not the underlying nodes. Re-apply the document order to the
+	// Konva children so the canvas matches the layer panel. Mask punch overlays
+	// are not layer containers and are kept on top.
+	$effect(() => {
+		void containerRevision;
+		const konvaLayer = canvasLayer?.node;
+		if (!konvaLayer) return;
+		const containers = new Set<Konva.Group>(containerMap.values());
+		const ordered = store.doc.layers
+			.map((l) => containerMap.get(l.id))
+			.filter((node): node is Konva.Group => !!node);
+		applyNodeOrder(konvaLayer, ordered, (node) => containers.has(node as Konva.Group));
+		konvaLayer.batchDraw();
+	});
 
 	function syncTransformer(id: string | null) {
 		if (!transformer) return;
@@ -89,7 +149,7 @@
 
 	$effect(() => {
 		if (!transformer) return;
-		if (brushLayer) {
+		if (brushLayer || sliceLayer) {
 			transformer.node.nodes([]);
 			transformer.node.getLayer()?.batchDraw();
 			return;
@@ -99,7 +159,16 @@
 
 	function handleStagePointerDown(e: Konva.KonvaEventObject<PointerEvent>) {
 		const targetStage = e.target.getStage();
-		if (e.target === targetStage) store.selectedId = null;
+		if (e.target !== targetStage) return;
+		if (store.autoSelect) {
+			store.selectedId = null;
+			return;
+		}
+		// Auto-select off: keep the selection and drag it from anywhere.
+		const id = store.selectedId;
+		const node = id ? nodeMap.get(id) : undefined;
+		const layer = id ? store.doc.layers.find((l) => l.id === id) : undefined;
+		if (node && layer && !layer.locked) node.startDrag({ evt: e.evt });
 	}
 
 	// --- Brush painting -----------------------------------------------------
@@ -107,6 +176,17 @@
 	let painting = $state(false);
 	let livePoints = $state<Point[]>([]);
 	let cursor = $state<Point | null>(null);
+
+	// Straight-slice drag: start and current end of the cut line, in stage px.
+	let slicing = $state(false);
+	let sliceStart = $state<Point | null>(null);
+	let sliceEnd = $state<Point | null>(null);
+
+	// Magic-eraser hover preview: the region that would be erased on click.
+	let magicPreview = $state<MagicEraseRegion | null>(null);
+	let magicPreviewKey = '';
+	let previewRequest = 0;
+	let previewTimer: ReturnType<typeof setTimeout> | undefined;
 
 	function stagePoint(ev: PointerEvent): Point {
 		const rect = stage?.node?.content.getBoundingClientRect();
@@ -124,7 +204,68 @@
 		};
 	}
 
+	function clearMagicPreview() {
+		if (previewTimer) clearTimeout(previewTimer);
+		previewTimer = undefined;
+		previewRequest++;
+		magicPreviewKey = '';
+		magicPreview = null;
+	}
+
+	/** Debounced preview so hovering shows the region before the user clicks. */
+	function scheduleMagicPreview(stageP: Point) {
+		const layer = magicLayer;
+		if (!layer) return;
+		if (previewTimer) clearTimeout(previewTimer);
+		previewTimer = setTimeout(() => void updateMagicPreview(layer, stageP), 120);
+	}
+
+	async function updateMagicPreview(layer: SubjectLayer, stageP: Point) {
+		const size = maskPixelSize(layer);
+		if (!size.width || !size.height) return;
+		const point = toSourcePoint(stageP, layer, size.width, size.height);
+		const key = `${layer.id}:${Math.round(point.x)}:${Math.round(point.y)}:${brush.tolerance}`;
+		if (key === magicPreviewKey) return;
+		magicPreviewKey = key;
+		const request = ++previewRequest;
+		const region = await computeMagicEraseRegion(layer.id, point, brush.tolerance).catch(
+			() => undefined,
+		);
+		if (request !== previewRequest) return;
+		magicPreview = region ?? null;
+	}
+
+	// Reset the preview whenever the tool, target or tolerance changes.
+	$effect(() => {
+		void brush.active;
+		void brush.tool;
+		void brush.tolerance;
+		void magicLayer?.id;
+		clearMagicPreview();
+	});
+
 	function onStagePointerDown(e: Konva.KonvaEventObject<PointerEvent>) {
+		if (brush.active && brush.tool === 'magic') {
+			const magician = magicLayer;
+			if (magician) {
+				e.evt.preventDefault();
+				void applyMagicErase(magician, e.evt);
+				return;
+			}
+		}
+		if (brush.active && brush.tool === 'slice') {
+			const slicer = sliceLayer;
+			if (slicer) {
+				e.evt.preventDefault();
+				slicing = true;
+				const p = stagePoint(e.evt);
+				sliceStart = p;
+				sliceEnd = p;
+				window.addEventListener('pointermove', onSlicePointerMove);
+				window.addEventListener('pointerup', onSlicePointerUp);
+				return;
+			}
+		}
 		const layer = brushLayer;
 		if (!layer) {
 			handleStagePointerDown(e);
@@ -137,6 +278,15 @@
 		cursor = p;
 		window.addEventListener('pointermove', onWindowPointerMove);
 		window.addEventListener('pointerup', onWindowPointerUp);
+	}
+
+	/** Flood-fill the colour under the cursor and erase it from the layer mask. */
+	async function applyMagicErase(layer: SubjectLayer, ev: PointerEvent) {
+		const size = maskPixelSize(layer);
+		if (!size.width || !size.height) return;
+		const point = toSourcePoint(stagePoint(ev), layer, size.width, size.height);
+		clearMagicPreview();
+		await magicEraseAt(layer.id, point, brush.tolerance).catch(() => {});
 	}
 
 	function onWindowPointerMove(ev: PointerEvent) {
@@ -166,13 +316,79 @@
 		await addMaskStroke(layer.id, { mode: brush.mode, radiusPx, points: sourcePoints });
 	}
 
+	function onSlicePointerMove(ev: PointerEvent) {
+		if (!slicing || !sliceStart) return;
+		const p = stagePoint(ev);
+		sliceEnd = ev.shiftKey ? snapLine(sliceStart, p) : p;
+	}
+
+	async function onSlicePointerUp() {
+		window.removeEventListener('pointermove', onSlicePointerMove);
+		window.removeEventListener('pointerup', onSlicePointerUp);
+		const layer = sliceLayer;
+		const start = sliceStart;
+		const end = sliceEnd;
+		slicing = false;
+		sliceStart = null;
+		sliceEnd = null;
+		if (!layer || !start || !end) return;
+		const size = maskPixelSize(layer);
+		if (!size.width || !size.height) return;
+		const p0 = toSourcePoint(start, layer, size.width, size.height);
+		const p1 = toSourcePoint(end, layer, size.width, size.height);
+		if (Math.hypot(p1.x - p0.x, p1.y - p0.y) < 1) return;
+		await sliceMask(layer.id, p0, p1, brush.sliceSide, brush.mode).catch(() => {});
+	}
+
 	function onStagePointerMove(e: Konva.KonvaEventObject<PointerEvent>) {
-		if (!brushLayer && !painting) return;
-		cursor = stagePoint(e.evt);
+		if (!brushLayer && !magicLayer && !painting) return;
+		const p = stagePoint(e.evt);
+		cursor = p;
+		if (magicLayer && !painting) scheduleMagicPreview(p);
 	}
 
 	const liveStrokePoints = $derived(livePoints.flatMap((p) => [p.x, p.y]));
 	const brushColor = $derived(brush.mode === 'erase' ? '#ef4444' : '#2563eb');
+
+	// Region the magic eraser would remove, drawn in stage space for the preview.
+	const magicPreviewPath = $derived.by(() => {
+		const layer = magicLayer;
+		const preview = magicPreview;
+		if (!layer || !preview || preview.polygons.length === 0) return '';
+		const size = maskPixelSize(layer);
+		if (!size.width || !size.height) return '';
+		const mm = polygonsToMm(preview.polygons, size.width, size.height, layer);
+		const page = transformPolygonsToPage(mm, layer);
+		return polygonsToSvgPath(page, 2, (p) => toStage(p));
+	});
+
+	const magicPreviewPercent = $derived(
+		magicPreview && magicPreview.total > 0
+			? Math.round((magicPreview.count / magicPreview.total) * 100)
+			: 0,
+	);
+
+	// Region the slice would remove, drawn in stage space while dragging.
+	const sliceLinePoints = $derived(
+		sliceStart && sliceEnd
+			? [sliceStart.x, sliceStart.y, sliceEnd.x, sliceEnd.y]
+			: [],
+	);
+	const slicePreviewPath = $derived.by(() => {
+		const layer = sliceLayer;
+		const start = sliceStart;
+		const end = sliceEnd;
+		if (!layer || !start || !end) return '';
+		const size = maskPixelSize(layer);
+		if (!size.width || !size.height) return '';
+		const p0 = toSourcePoint(start, layer, size.width, size.height);
+		const p1 = toSourcePoint(end, layer, size.width, size.height);
+		const quad = halfPlanePolygon(p0, p1, brush.sliceSide, size);
+		if (quad.length === 0) return '';
+		const mm = polygonsToMm([quad], size.width, size.height, layer);
+		const page = transformPolygonsToPage(mm, layer);
+		return polygonsToSvgPath(page, 2, (p) => toStage(p));
+	});
 </script>
 
 <div class="editor">
@@ -180,9 +396,27 @@
 		<button onclick={() => (zoom = Math.max(0.5, zoom - 0.5))} title="Zoom out">−</button>
 		<span class="zoom">{zoom.toFixed(1)} px/mm</span>
 		<button onclick={() => (zoom = Math.min(12, zoom + 0.5))} title="Zoom in">+</button>
+		<label class="toggle" title="Click the topmost layer under the cursor to select it">
+			<input type="checkbox" bind:checked={store.autoSelect} />
+			Auto-select
+		</label>
 		{#if brush.active}
 			<span class="brush-hint">
-				{brushLayer ? `Painting: ${brush.mode}` : 'Select a subject or mask layer to paint'}
+				{#if brush.tool === 'magic'}
+					{#if !magicLayer}
+						Select a traced layer to magic-erase
+					{:else if magicPreview}
+						Magic eraser: {magicPreviewPercent}% of subject selected — click to erase
+					{:else}
+						Magic eraser: hover to preview, click to erase
+					{/if}
+				{:else if brush.tool === 'slice'}
+					{sliceLayer
+						? `Slice: drag a line to ${brush.mode === 'erase' ? 'cut away' : 'add back'} one side (hold Shift to level)`
+						: 'Select a subject or mask layer to slice'}
+				{:else}
+					{brushLayer ? `Painting: ${brush.mode}` : 'Select a subject or mask layer to paint'}
+				{/if}
 			</span>
 		{/if}
 		<span class="dims">{media.widthMm.toFixed(1)} × {media.heightMm.toFixed(1)} mm</span>
@@ -195,7 +429,10 @@
 			height={stageHeight}
 			onpointerdown={onStagePointerDown}
 			onpointermove={onStagePointerMove}
-			onpointerleave={() => (cursor = null)}
+			onpointerleave={() => {
+				cursor = null;
+				clearMagicPreview();
+			}}
 		>
 			<Layer>
 				<Rect x={0} y={0} width={stageWidth} height={stageHeight} fill="#e9ecf1" listening={false} />
@@ -235,7 +472,7 @@
 				{/if}
 			</Layer>
 
-			<Layer>
+			<Layer bind:this={canvasLayer}>
 				{#each store.doc.layers as layer (layer.id)}
 					<LayerNode
 						{layer}
@@ -245,6 +482,7 @@
 						showCut={store.doc.showCutLine}
 						interactive={!brush.active}
 						onReady={(node) => registerNode(layer.id, node)}
+						onContainer={(node) => registerContainer(layer.id, node)}
 						onSelect={(id) => (store.selectedId = id)}
 					/>
 				{/each}
@@ -274,8 +512,33 @@
 				</Layer>
 			{/if}
 
-			{#if brushLayer}
+			{#if brushLayer || magicLayer || sliceLayer}
 				<Layer listening={false}>
+					{#if slicePreviewPath}
+						<Path
+							data={slicePreviewPath}
+							fill="rgba(239, 68, 68, 0.35)"
+							listening={false}
+						/>
+					{/if}
+					{#if sliceLinePoints.length === 4}
+						<Line
+							points={sliceLinePoints}
+							stroke="#ef4444"
+							strokeWidth={1.5}
+							dash={[8, 4]}
+							listening={false}
+						/>
+					{/if}
+					{#if magicPreviewPath}
+						<Path
+							data={magicPreviewPath}
+							fill="rgba(239, 68, 68, 0.4)"
+							stroke="#ef4444"
+							strokeWidth={1}
+							listening={false}
+						/>
+					{/if}
 					{#if livePoints.length > 1}
 						<Line
 							points={liveStrokePoints}
@@ -297,15 +560,39 @@
 						/>
 					{/if}
 					{#if cursor}
-						<Circle
-							x={cursor.x}
-							y={cursor.y}
-							radius={Math.max(1, brush.radiusMm * zoom)}
-							stroke={brushColor}
-							strokeWidth={1.5}
-							fillEnabled={false}
-							listening={false}
-						/>
+						{#if brush.tool === 'magic'}
+							<Circle
+								x={cursor.x}
+								y={cursor.y}
+								radius={6}
+								stroke="#ef4444"
+								strokeWidth={1.5}
+								fillEnabled={false}
+								listening={false}
+							/>
+							<Line
+								points={[cursor.x - 10, cursor.y, cursor.x + 10, cursor.y]}
+								stroke="#ef4444"
+								strokeWidth={1}
+								listening={false}
+							/>
+							<Line
+								points={[cursor.x, cursor.y - 10, cursor.x, cursor.y + 10]}
+								stroke="#ef4444"
+								strokeWidth={1}
+								listening={false}
+							/>
+						{:else}
+							<Circle
+								x={cursor.x}
+								y={cursor.y}
+								radius={Math.max(1, brush.radiusMm * zoom)}
+								stroke={brushColor}
+								strokeWidth={1.5}
+								fillEnabled={false}
+								listening={false}
+							/>
+						{/if}
 					{/if}
 				</Layer>
 			{/if}
@@ -348,6 +635,14 @@
 	.brush-hint {
 		font-size: 0.8rem;
 		color: var(--muted);
+	}
+	.toggle {
+		display: flex;
+		align-items: center;
+		gap: 0.35rem;
+		font-size: 0.8rem;
+		color: var(--muted);
+		user-select: none;
 	}
 	.brush-hint {
 		color: var(--accent);

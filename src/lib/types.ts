@@ -50,8 +50,12 @@ export interface BookmarkConfig {
 	subjectLayerId: string | null;
 	/** Depth of the V-notch at the bottom centre, in mm (0 = no notch). */
 	notchDepthMm: number;
-	/** Radius of the bottom corners, in mm (0 = square). */
+	/** Radius of both bottom corners, in mm (0 = square). */
 	cornerRadiusMm: number;
+	/** Radius of the top-left corner of the plain base, in mm (0 = square). */
+	cornerRadiusTopLeftMm: number;
+	/** Radius of the top-right corner of the plain base, in mm (0 = square). */
+	cornerRadiusTopRightMm: number;
 	/**
 	 * How far the head outline may extend beyond the page box (top/left/right),
 	 * in mm. The head band follows the subject outline and is only clipped by
@@ -70,6 +74,13 @@ export interface MaskStroke {
 	radiusPx: number;
 	/** Stroke centreline in source pixel space. */
 	points: Point[];
+	/**
+	 * When present, the edit fills these closed polygons (source/mask pixel
+	 * space) instead of stroking `points`. Used by the magic eraser, which
+	 * flood-fills a similarly-coloured region and stores only its outline so the
+	 * edit stays compact and undoable.
+	 */
+	fillPolygons?: Point[][];
 }
 
 interface LayerBase {

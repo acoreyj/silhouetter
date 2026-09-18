@@ -78,6 +78,8 @@ describe('bookmarkBasePolygon', () => {
 			subjectLayerId: null,
 			notchDepthMm: 10,
 			cornerRadiusMm: 0,
+			cornerRadiusTopLeftMm: 0,
+			cornerRadiusTopRightMm: 0,
 			headOverflowMm: 0,
 		});
 		const b = bounds([ring]);
@@ -95,6 +97,8 @@ describe('bookmarkBasePolygon', () => {
 			subjectLayerId: null,
 			notchDepthMm: 0,
 			cornerRadiusMm: 0,
+			cornerRadiusTopLeftMm: 0,
+			cornerRadiusTopRightMm: 0,
 			headOverflowMm: 0,
 		});
 		expect(ring.every((p) => p.y <= 150.0001)).toBe(true);
@@ -107,11 +111,35 @@ describe('bookmarkBasePolygon', () => {
 			subjectLayerId: null,
 			notchDepthMm: 0,
 			cornerRadiusMm: 5,
+			cornerRadiusTopLeftMm: 0,
+			cornerRadiusTopRightMm: 0,
 			headOverflowMm: 0,
 		});
 		expect(ring.length).toBeGreaterThan(4);
 		// No point sits exactly on the square bottom corner.
 		expect(ring.some((p) => Math.abs(p.x) < 1e-6 && Math.abs(p.y - 150) < 1e-6)).toBe(false);
+	});
+
+	it('rounds the top corners independently', () => {
+		const ring = bookmarkBasePolygon(page, {
+			baseFraction: 0.75,
+			subjectLayerId: null,
+			notchDepthMm: 0,
+			cornerRadiusMm: 0,
+			cornerRadiusTopLeftMm: 5,
+			cornerRadiusTopRightMm: 8,
+			headOverflowMm: 0,
+		});
+		const b = bounds([ring]);
+		expect(b.minX).toBeCloseTo(0, 3);
+		expect(b.maxX).toBeCloseTo(50, 3);
+		expect(b.minY).toBeCloseTo(37.5, 3);
+		// No point sits exactly on either square top corner.
+		expect(ring.some((p) => Math.abs(p.x) < 1e-6 && Math.abs(p.y - 37.5) < 1e-6)).toBe(false);
+		expect(ring.some((p) => Math.abs(p.x - 50) < 1e-6 && Math.abs(p.y - 37.5) < 1e-6)).toBe(false);
+		// Each corner starts to round by its own radius.
+		expect(ring.some((p) => Math.abs(p.x - 5) < 1e-6 && Math.abs(p.y - 37.5) < 1e-6)).toBe(true);
+		expect(ring.some((p) => Math.abs(p.x - 42) < 1e-6 && Math.abs(p.y - 37.5) < 1e-6)).toBe(true);
 	});
 });
 

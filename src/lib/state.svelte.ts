@@ -15,12 +15,23 @@ export { DEFAULT_PAGE_SIZES, DPI_PRESETS, createDefaultDocument, newId } from '.
 /** Single reactive document store for the whole editor. */
 export const store = new DocumentStore();
 
-/** Transient mask-brush tool state (not part of the document/undo history). */
+/**
+ * Mask-editing tool. `brush` paints a stroke; `magic` flood-fills on click;
+ * `slice` removes everything on one side of a straight line.
+ */
+export type MaskTool = 'brush' | 'magic' | 'slice';
+
+/** Transient mask-editing tool state (not part of the document/undo history). */
 export const brush = $state({
 	active: false,
+	tool: 'brush' as MaskTool,
 	mode: 'erase' as MaskStrokeMode,
 	/** Brush radius in page millimetres. */
 	radiusMm: 3,
+	/** Magic-eraser colour tolerance (Euclidean RGB distance, 0-255). */
+	tolerance: 32,
+	/** Side of the slice line to remove: `1` or `-1`. Flipped by the UI. */
+	sliceSide: 1 as 1 | -1,
 });
 
 const imageCache = new Map<string, HTMLImageElement>();
@@ -39,7 +50,16 @@ const maskRevisions = new Map<string, number>();
  */
 export const maskRevision = $state({ value: 0 });
 
+/**
+ * Reactive mirror of {@link imageCache}. Loading a source is asynchronous and
+ * happens after the layers that reference it are already on screen (e.g. when
+ * opening a project), so derived render data must re-read the cache when an
+ * image finishes decoding. Reading {@link getSource} tracks this counter.
+ */
+export const sourceRevision = $state({ value: 0 });
+
 export function getSource(id: string): HTMLImageElement | undefined {
+	void sourceRevision.value;
 	return imageCache.get(id);
 }
 
@@ -48,6 +68,7 @@ export async function loadSource(source: ImageSource): Promise<HTMLImageElement>
 	if (cached) return cached;
 	const el = await loadImageElement(source.src);
 	imageCache.set(source.id, el);
+	sourceRevision.value++;
 	return el;
 }
 
@@ -83,6 +104,44 @@ function paintStrokeShape(
 	for (let i = 1; i < points.length; i++) ctx.lineTo(points[i].x, points[i].y);
 }
 
+/** Begin a path for a stored edit: filled polygons or a stroked centreline. */
+function beginEditPath(
+	ctx: CanvasRenderingContext2D,
+	stroke: MaskStroke,
+	radiusPx: number,
+): void {
+	ctx.beginPath();
+	const polygons = stroke.fillPolygons;
+	if (polygons && polygons.length > 0) {
+		for (const poly of polygons) {
+			if (poly.length < 3) continue;
+			ctx.moveTo(poly[0].x, poly[0].y);
+			for (let i = 1; i < poly.length; i++) ctx.lineTo(poly[i].x, poly[i].y);
+			ctx.closePath();
+		}
+		return;
+	}
+	paintStrokeShape(ctx, stroke.points, radiusPx);
+}
+
+/** True when an edit fills a region rather than stroking a centreline. */
+function isFillEdit(stroke: MaskStroke): boolean {
+	return !!stroke.fillPolygons && stroke.fillPolygons.length > 0;
+}
+
+/** Compact signature of a layer's stored mask edits, for reactive effects. */
+export function maskEditSignature(strokes: MaskStroke[]): string {
+	let points = 0;
+	let fill = 0;
+	for (const stroke of strokes) {
+		points += stroke.points.length;
+		if (stroke.fillPolygons) {
+			for (const poly of stroke.fillPolygons) fill += poly.length;
+		}
+	}
+	return `${strokes.length}:${points}:${fill}`;
+}
+
 /** Apply one brush stroke to a mask canvas. */
 function applyStroke(
 	ctx: CanvasRenderingContext2D,
@@ -96,15 +155,14 @@ function applyStroke(
 		target.lineWidth = radius * 2;
 		target.lineCap = 'round';
 		target.lineJoin = 'round';
-		if (stroke.points.length === 1) target.fill();
+		if (isFillEdit(stroke) || stroke.points.length === 1) target.fill();
 		else target.stroke();
 	};
 
 	if (stroke.mode === 'erase') {
 		ctx.save();
 		ctx.globalCompositeOperation = 'destination-out';
-		ctx.beginPath();
-		paintStrokeShape(ctx, stroke.points, radius);
+		beginEditPath(ctx, stroke, radius);
 		paint(ctx);
 		ctx.restore();
 		return;
@@ -117,8 +175,7 @@ function applyStroke(
 	const tctx = get2d(tmp);
 	tctx.drawImage(base, 0, 0);
 	tctx.globalCompositeOperation = 'destination-in';
-	tctx.beginPath();
-	paintStrokeShape(tctx, stroke.points, radius);
+	beginEditPath(tctx, stroke, radius);
 	paint(tctx);
 	tctx.globalCompositeOperation = 'source-over';
 	ctx.drawImage(tmp as unknown as CanvasImageSource, 0, 0);
@@ -137,9 +194,8 @@ function applyHoleStroke(ctx: CanvasRenderingContext2D, stroke: MaskStroke): voi
 	ctx.lineCap = 'round';
 	ctx.lineJoin = 'round';
 	ctx.globalCompositeOperation = stroke.mode === 'erase' ? 'source-over' : 'destination-out';
-	ctx.beginPath();
-	paintStrokeShape(ctx, stroke.points, radius);
-	if (stroke.points.length === 1) ctx.fill();
+	beginEditPath(ctx, stroke, radius);
+	if (isFillEdit(stroke) || stroke.points.length === 1) ctx.fill();
 	else ctx.stroke();
 	ctx.restore();
 }

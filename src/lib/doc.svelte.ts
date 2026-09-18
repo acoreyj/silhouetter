@@ -7,6 +7,7 @@ import type {
 } from '$lib/types';
 
 export const DEFAULT_PAGE_SIZES: { label: string; width: number; height: number }[] = [
+	{ label: 'Bookmark 66 × 166 mm', width: 66, height: 166 },
 	{ label: 'Bookmark 50 × 150 mm', width: 50, height: 150 },
 	{ label: 'Bookmark 40 × 120 mm', width: 40, height: 120 },
 	{ label: 'A6 (105 × 148 mm)', width: 105, height: 148 },
@@ -34,6 +35,8 @@ export function defaultBookmark(): BookmarkConfig {
 		subjectLayerId: null,
 		notchDepthMm: 6,
 		cornerRadiusMm: 2,
+		cornerRadiusTopLeftMm: 0,
+		cornerRadiusTopRightMm: 0,
 		headOverflowMm: 0,
 	};
 }
@@ -41,7 +44,7 @@ export function defaultBookmark(): BookmarkConfig {
 export function createDefaultDocument(): DocumentModel {
 	return {
 		name: 'Untitled bookmark',
-		page: { width: 50, height: 150 },
+		page: { width: 66, height: 166 },
 		trimShape: 'rect',
 		bookmark: defaultBookmark(),
 		dpi: 300,
@@ -67,6 +70,12 @@ export function newId(prefix = 'id'): string {
 export class DocumentStore {
 	doc = $state<DocumentModel>(createDefaultDocument());
 	selectedId = $state<string | null>(null);
+	/**
+	 * When false (default), dragging always moves the currently selected layer,
+	 * regardless of what is under the cursor. When true, clicking selects the
+	 * topmost layer under the cursor (the classic direct-selection behaviour).
+	 */
+	autoSelect = $state(false);
 	/** Metadata for every bitmap referenced by layers, keyed by source id. */
 	sources = $state<Record<string, ImageSource>>({});
 

@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { Image as KonvaImage } from 'svelte-konva';
 	import type { MaskLayer } from '$lib/types';
-	import { store, getMask, getMaskRevision, maskRevision } from '$lib/state.svelte';
+	import { store, getMask, getMaskRevision, maskRevision, maskEditSignature } from '$lib/state.svelte';
 
 	let {
 		layer,
@@ -18,7 +18,7 @@
 	// Page-coloured punch overlay, rebuilt whenever the mask changes. Building it
 	// synchronously in a derivation keeps it in step with the reactive strokes.
 	const canvas = $derived.by<HTMLCanvasElement | undefined>(() => {
-		void `${layer.maskStrokes.length}:${layer.maskStrokes.reduce((n, s) => n + s.points.length, 0)}`;
+		void maskEditSignature(layer.maskStrokes);
 		void getMaskRevision(layer.id);
 		void maskRevision.value;
 		const hole = getMask(layer.id);

@@ -55,7 +55,9 @@ export async function segmentForeground(
 		);
 	}
 
-	const { canvas, dataUrl } = buildAlphaMask(foreground, 8);
+	// Use the default cut-off + edge erosion so low-alpha fringes in tight gaps
+	// do not survive as white halos. See `AlphaMaskOptions`.
+	const { canvas, dataUrl } = buildAlphaMask(foreground);
 	return {
 		foreground,
 		maskDataUrl: dataUrl,

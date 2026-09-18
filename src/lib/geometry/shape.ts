@@ -81,7 +81,8 @@ export function bookmarkSeamY(page: Size, cfg: BookmarkConfig): number {
 
 /**
  * Build the plain bookmark base: a rectangle from the seam down to the bottom,
- * with an optional V-notch in the bottom edge and rounded bottom corners.
+ * with an optional V-notch in the bottom edge and independently rounded top and
+ * bottom corners.
  */
 export function bookmarkBasePolygon(
 	page: Size,
@@ -99,10 +100,32 @@ export function bookmarkBasePolygon(
 		Math.max(0, Math.min(w / 2 - notchHalf, baseHeight / 2)),
 	);
 
-	const pts: Point[] = [
-		{ x: 0, y: seamY },
-		{ x: w, y: seamY },
-	];
+	// The top corners round into the seam. Keep them clear of the bottom arcs
+	// and of each other so the ring never self-intersects.
+	const maxTopRadius = Math.max(0, Math.min(w, baseHeight - radius));
+	let tl = clamp(cfg.cornerRadiusTopLeftMm ?? 0, 0, maxTopRadius);
+	let tr = clamp(cfg.cornerRadiusTopRightMm ?? 0, 0, maxTopRadius);
+	if (tl + tr > w) {
+		const scale = w / (tl + tr);
+		tl *= scale;
+		tr *= scale;
+	}
+
+	const pts: Point[] = [];
+
+	if (tl > 0) {
+		pts.push({ x: 0, y: seamY + tl });
+		pts.push(...arcPoints(tl, seamY + tl, tl, Math.PI, 1.5 * Math.PI, 8).slice(1));
+	} else {
+		pts.push({ x: 0, y: seamY });
+	}
+
+	if (tr > 0) {
+		pts.push({ x: w - tr, y: seamY });
+		pts.push(...arcPoints(w - tr, seamY + tr, tr, -Math.PI / 2, 0, 8).slice(1));
+	} else {
+		pts.push({ x: w, y: seamY });
+	}
 
 	if (radius > 0) {
 		pts.push({ x: w, y: h - radius });
