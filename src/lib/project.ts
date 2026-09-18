@@ -1,4 +1,5 @@
 import type { DocumentModel, ImageSource } from './types';
+import { defaultSheet } from './doc.svelte';
 
 /**
  * Project file format. A project bundles the document (which already contains
@@ -114,7 +115,16 @@ export function fromProjectFile(input: unknown): {
 		};
 	}
 
-	return { doc: data.doc as DocumentModel, sources };
+	return { doc: normalizeDoc(data.doc as DocumentModel), sources };
+}
+
+/** Backfill fields added after a project was saved. */
+function normalizeDoc(doc: DocumentModel): DocumentModel {
+	if (!doc.sheet) doc.sheet = defaultSheet();
+	for (const layer of doc.layers ?? []) {
+		if (typeof layer.mirrorOnBack !== 'boolean') layer.mirrorOnBack = true;
+	}
+	return doc;
 }
 
 /** Human-readable byte size for the saved-project list. */

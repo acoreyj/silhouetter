@@ -176,6 +176,8 @@ function punchMaskLayer(
 	pxPerMm: number,
 	offX = 0,
 	offY = 0,
+	side: RenderSide = 'front',
+	canvasWidthPx = 0,
 ): void {
 	const w = Math.max(1, layer.width * pxPerMm);
 	const h = Math.max(1, layer.height * pxPerMm);
@@ -183,11 +185,20 @@ function punchMaskLayer(
 	const cy = (layer.y + layer.height / 2) * pxPerMm + offY;
 	ctx.save();
 	ctx.globalCompositeOperation = 'destination-out';
-	ctx.translate(cx, cy);
-	ctx.rotate((layer.rotation * Math.PI) / 180);
+	if (side === 'back') {
+		ctx.translate(canvasWidthPx - cx, cy);
+		ctx.rotate((layer.rotation * -Math.PI) / 180);
+		if (layer.mirrorOnBack) ctx.scale(-1, 1);
+	} else {
+		ctx.translate(cx, cy);
+		ctx.rotate((layer.rotation * Math.PI) / 180);
+	}
 	ctx.drawImage(mask as unknown as CanvasImageSource, -w / 2, -h / 2, w, h);
 	ctx.restore();
 }
+
+/** Which physical side of a double-sided sheet is being rendered. */
+export type RenderSide = 'front' | 'back';
 
 /** Render all visible layers into a canvas covering `region` (page mm). */
 export function renderTrim(
@@ -196,6 +207,7 @@ export function renderTrim(
 	getMask: (layer: Layer) => HTMLImageElement | undefined,
 	pxPerMm: number,
 	region: Rect = { x: 0, y: 0, width: doc.page.width, height: doc.page.height },
+	side: RenderSide = 'front',
 ): Canvas2D {
 	const w = Math.max(1, Math.round(region.width * pxPerMm));
 	const h = Math.max(1, Math.round(region.height * pxPerMm));
@@ -219,8 +231,18 @@ export function renderTrim(
 		const cy = (layer.y + layer.height / 2) * pxPerMm + offY;
 		ctx.save();
 		ctx.globalAlpha = layer.opacity;
-		ctx.translate(cx, cy);
-		ctx.rotate((layer.rotation * Math.PI) / 180);
+		if (side === 'back') {
+			// Mirror the layer's position about the canvas centre; negate the
+			// rotation so the whole composition flips. Layers flagged
+			// `mirrorOnBack` also have their pixels flipped, while logos and
+			// other readable content are left the right way round.
+			ctx.translate(w - cx, cy);
+			ctx.rotate((layer.rotation * -Math.PI) / 180);
+			if (layer.mirrorOnBack) ctx.scale(-1, 1);
+		} else {
+			ctx.translate(cx, cy);
+			ctx.rotate((layer.rotation * Math.PI) / 180);
+		}
 		ctx.drawImage(raster as unknown as CanvasImageSource, -raster.width / 2, -raster.height / 2);
 		ctx.restore();
 	}
@@ -229,7 +251,7 @@ export function renderTrim(
 	for (const layer of doc.layers) {
 		if (layer.kind !== 'mask' || !layer.visible || layer.opacity <= 0) continue;
 		const mask = getMask(layer);
-		if (mask) punchMaskLayer(ctx, layer, mask, pxPerMm, offX, offY);
+		if (mask) punchMaskLayer(ctx, layer, mask, pxPerMm, offX, offY, side, w);
 	}
 
 	return canvas;
@@ -368,18 +390,34 @@ export function artworkRect(
 	};
 }
 
+export interface ArtworkRenderOptions {
+	/** Physical side to render; 'back' mirrors the composition for duplexing. */
+	side?: RenderSide;
+}
+
+/** Mirror a page-mm polygon set about the vertical line `axisX`. */
+function mirrorPolygonsX(polygons: Point[][], axisX: number): Point[][] {
+	return polygons.map((poly) => poly.map((p) => ({ x: 2 * axisX - p.x, y: p.y })));
+}
+
 /**
  * Full artwork render (trim + optional bleed) at the document DPI. For a
  * non-rectangular trim, the result is clipped to the trim outline (expanded by
  * the bleed amount) so the printed artwork follows the bookmark silhouette.
  * The canvas covers {@link artworkRect}, so a bookmark head that overflows the
  * page is rendered too.
+ *
+ * Pass `{ side: 'back' }` to produce the reverse of a duplex sheet: layers are
+ * mirrored about the canvas centre and the clip outline follows, except layers
+ * with `mirrorOnBack: false`, whose pixels stay readable.
  */
 export function renderArtwork(
 	doc: DocumentModel,
 	getSource: (id: string) => HTMLImageElement | undefined,
 	getMask: (layer: Layer) => HTMLImageElement | undefined,
+	options: ArtworkRenderOptions = {},
 ): Canvas2D {
+	const side = options.side ?? 'front';
 	const pxPerMm = doc.dpi / 25.4;
 	const bleed = doc.bleed.enabled ? doc.bleed.amountMm : 0;
 	const rect = artworkRect(doc, getSource);
@@ -389,17 +427,19 @@ export function renderArtwork(
 		width: Math.max(0.01, rect.width - bleed * 2),
 		height: Math.max(0.01, rect.height - bleed * 2),
 	};
-	const trim = renderTrim(doc, getSource, getMask, pxPerMm, trimRegion);
+	const trim = renderTrim(doc, getSource, getMask, pxPerMm, trimRegion, side);
 	const bleedPx = doc.bleed.enabled ? mmToPx(doc.bleed.amountMm, doc.dpi) : 0;
 	const art = addBleed(trim, bleedPx, doc.bleed.mode, doc.bleed.solidColor);
 
 	if (doc.trimShape === 'rect') return art;
 
 	const shape = buildTrimPolygons(doc, getSource);
+	const outline =
+		side === 'back' ? mirrorPolygonsX(shape, rect.x + rect.width / 2) : shape;
 	const expanded =
 		bleed > 0
-			? offsetPolygons(shape, bleed, { jointType: 'jtRound', precision: 0.05 })
-			: shape;
+			? offsetPolygons(outline, bleed, { jointType: 'jtRound', precision: 0.05 })
+			: outline;
 	clipCanvasToPolygons(art, expanded, pxPerMm, { x: rect.x, y: rect.y });
 	return art;
 }

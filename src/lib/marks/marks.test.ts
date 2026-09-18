@@ -41,6 +41,22 @@ describe('buildMarkSet', () => {
 		});
 		expect(buildMarkSet(doc).primitives).toHaveLength(0);
 	});
+
+	it('wraps an explicit area instead of the page', () => {
+		const doc = docWith({
+			page: { width: 50, height: 150 },
+			registration: {
+				...createDefaultDocument().registration,
+				style: 'generic',
+				marginMm: 5,
+				sizeMm: 5,
+			},
+		});
+		const marks = buildMarkSet(doc, { width: 200, height: 60 });
+		// Crosses sit 5mm out with 2.5mm arms: 200 + 2*5 + 5 = 215mm wide.
+		expect(marks.bounds.width).toBeCloseTo(215, 6);
+		expect(marks.bounds.height).toBeCloseTo(75, 6);
+	});
 });
 
 describe('computeMedia', () => {

@@ -4,6 +4,7 @@ import type {
 	ImageSource,
 	Layer,
 	RegistrationConfig,
+	SheetConfig,
 } from '$lib/types';
 
 export const DEFAULT_PAGE_SIZES: { label: string; width: number; height: number }[] = [
@@ -29,6 +30,10 @@ export function defaultRegistration(): RegistrationConfig {
 	};
 }
 
+export function defaultSheet(): SheetConfig {
+	return { enabled: false, preset: 'a4-landscape', copies: 3, duplex: true };
+}
+
 export function defaultBookmark(): BookmarkConfig {
 	return {
 		baseFraction: 0.75,
@@ -50,6 +55,7 @@ export function createDefaultDocument(): DocumentModel {
 		dpi: 300,
 		bleed: { enabled: true, amountMm: 3, mode: 'mirror', solidColor: '#ffffff' },
 		registration: defaultRegistration(),
+		sheet: defaultSheet(),
 		layers: [],
 		background: '',
 		showCutLine: true,

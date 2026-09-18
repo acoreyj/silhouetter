@@ -79,6 +79,7 @@ export async function importImage(file: File): Promise<ImageLayer> {
 		width: w,
 		height: h,
 		rotation: 0,
+		mirrorOnBack: true,
 		sourceId: source.id,
 	};
 	store.addLayer(layer);
@@ -181,6 +182,7 @@ export function addMaskLayer(reference?: Layer): MaskLayer {
 		width: ref ? ref.width : page.width,
 		height: ref ? ref.height : page.height,
 		rotation: ref ? ref.rotation : 0,
+		mirrorOnBack: true,
 		pixelWidth: Math.max(1, Math.round(pixels.width)),
 		pixelHeight: Math.max(1, Math.round(pixels.height)),
 		maskDataUrl: null,

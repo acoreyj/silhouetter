@@ -99,6 +99,13 @@ interface LayerBase {
 	height: number;
 	/** Rotation around the layer centre, in degrees. */
 	rotation: number;
+	/**
+	 * Whether the layer is mirrored on the double-sided PDF's back page. Leave
+	 * `true` (the default) for artwork that should align through the paper;
+	 * set `false` for logos, wordmarks and other content that must stay
+	 * readable when printed on the reverse.
+	 */
+	mirrorOnBack: boolean;
 }
 
 export interface ImageLayer extends LayerBase {
@@ -189,6 +196,20 @@ export interface RegistrationConfig {
 	dataMatrixValue: string;
 }
 
+export type SheetPreset = 'a4-landscape' | 'letter-landscape';
+
+/** Multi-up imposition settings used by the PDF exporter. */
+export interface SheetConfig {
+	/** Impose several copies on one landscape sheet instead of one page per item. */
+	enabled: boolean;
+	/** Landscape sheet size to impose onto. */
+	preset: SheetPreset;
+	/** Copies laid out side by side across the sheet. */
+	copies: 2 | 3;
+	/** Also emit a second, horizontally-mirrored page for double-sided printing. */
+	duplex: boolean;
+}
+
 export interface DocumentModel {
 	name: string;
 	/** Trim (bounding-box) size, in mm. */
@@ -201,6 +222,8 @@ export interface DocumentModel {
 	dpi: number;
 	bleed: BleedConfig;
 	registration: RegistrationConfig;
+	/** Multi-up sheet imposition settings for PDF export. */
+	sheet: SheetConfig;
 	layers: Layer[];
 	/** Background fill drawn behind all layers, or '' for transparent. */
 	background: string;

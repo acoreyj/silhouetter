@@ -18,6 +18,7 @@ function subject(patch: Partial<SubjectLayer> = {}): SubjectLayer {
 		width: 50,
 		height: 50,
 		rotation: 0,
+		mirrorOnBack: true,
 		sourceId: 'src_1',
 		maskDataUrl: null,
 		cutPolygons: [

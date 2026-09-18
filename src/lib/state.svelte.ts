@@ -11,6 +11,7 @@ import type {
 import { createCanvas, get2d, loadImageElement, canvasToDataUrl } from './image/canvas';
 
 export { DEFAULT_PAGE_SIZES, DPI_PRESETS, createDefaultDocument, newId } from './doc.svelte';
+export { SHEET_PRESETS, sheetSizeFor } from './export/impose';
 
 /** Single reactive document store for the whole editor. */
 export const store = new DocumentStore();

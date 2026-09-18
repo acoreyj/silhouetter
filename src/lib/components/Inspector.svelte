@@ -1,11 +1,27 @@
 <script lang="ts">
-	import { store, DEFAULT_PAGE_SIZES, DPI_PRESETS, brush, getSource } from '$lib/state.svelte';
+	import { store, DEFAULT_PAGE_SIZES, DPI_PRESETS, SHEET_PRESETS, brush, getSource } from '$lib/state.svelte';
 	import { MARK_STYLES } from '$lib/marks';
 	import { retraceLayer, clearMaskStrokes } from '$lib/actions';
 	import { bookmarkHasHeadCoverage } from '$lib/geometry/shape';
+	import { artworkRect } from '$lib/image/ops';
+	import { DEFAULT_GUTTER_MM, imposeSheet, sheetSizeFor } from '$lib/export/impose';
 	import type { BookmarkConfig, Layer, SubjectLayer } from '$lib/types';
 
 	const layer = $derived(store.selected);
+
+	const sheetFits = $derived.by(() => {
+		if (!store.doc.sheet.enabled) return true;
+		const rect = artworkRect(store.doc, getSource);
+		const marginMm =
+			store.doc.registration.style !== 'none' ? store.doc.registration.marginMm : 0;
+		return imposeSheet({
+			sheet: sheetSizeFor(store.doc.sheet.preset),
+			item: { widthMm: rect.width, heightMm: rect.height },
+			copies: store.doc.sheet.copies,
+			marginMm,
+			gutterMm: DEFAULT_GUTTER_MM,
+		}).fits;
+	});
 
 	const subjectLayers = $derived(
 		store.doc.layers.filter((l): l is SubjectLayer => l.kind === 'subject'),
@@ -375,6 +391,62 @@
 	</section>
 
 	<section>
+		<h2>Sheet / imposition</h2>
+		<label class="checkbox">
+			<input
+				type="checkbox"
+				checked={store.doc.sheet.enabled}
+				onchange={(e) => setDoc((d) => (d.sheet.enabled = e.currentTarget.checked))}
+			/>
+			Impose on a landscape sheet
+		</label>
+		{#if store.doc.sheet.enabled}
+			<label>
+				Sheet size
+				<select
+					value={store.doc.sheet.preset}
+					onchange={(e) =>
+						setDoc((d) => (d.sheet.preset = e.currentTarget.value as typeof d.sheet.preset))}
+				>
+					{#each SHEET_PRESETS as preset (preset.value)}
+						<option value={preset.value}>{preset.label}</option>
+					{/each}
+				</select>
+			</label>
+			<label>
+				Copies per page
+				<select
+					value={store.doc.sheet.copies}
+					onchange={(e) =>
+						setDoc((d) => (d.sheet.copies = Number(e.currentTarget.value) as 2 | 3))}
+				>
+					<option value={2}>2</option>
+					<option value={3}>3</option>
+				</select>
+			</label>
+			<label class="checkbox">
+				<input
+					type="checkbox"
+					checked={store.doc.sheet.duplex}
+					onchange={(e) => setDoc((d) => (d.sheet.duplex = e.currentTarget.checked))}
+				/>
+				Double-sided (mirrored back page)
+			</label>
+			{#if !sheetFits}
+				<p class="hint error">
+					{store.doc.sheet.copies} copies plus the registration margin do not fit on this sheet.
+					Choose a smaller page or fewer copies.
+				</p>
+			{:else}
+				<p class="hint">
+					PDF export places {store.doc.sheet.copies} copies across the sheet, mirrored for duplex.
+					Untick <em>Mirror on back</em> on a layer to keep logos readable.
+				</p>
+			{/if}
+		{/if}
+	</section>
+
+	<section>
 		<h2>Cut line</h2>
 		<label class="checkbox">
 			<input
@@ -468,6 +540,17 @@
 					onchange={(e) => updateLayer({ rotation: Number(e.currentTarget.value) })}
 				/>
 			</label>
+			<label class="checkbox">
+				<input
+					type="checkbox"
+					checked={layer.mirrorOnBack}
+					onchange={(e) => updateLayer({ mirrorOnBack: e.currentTarget.checked })}
+				/>
+				Mirror on back
+			</label>
+			{#if store.doc.sheet.enabled && store.doc.sheet.duplex && !layer.mirrorOnBack}
+				<p class="hint">Stays readable on the reverse (good for logos and wordmarks).</p>
+			{/if}
 
 			{#if layer.kind === 'image'}
 				<button onclick={onCoverPage}>Fill page (cover)</button>

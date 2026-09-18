@@ -23,6 +23,7 @@ function fixture(): { doc: DocumentModel; sources: Record<string, ImageSource> }
 		width: 50,
 		height: 25,
 		rotation: 0,
+		mirrorOnBack: true,
 		sourceId: 'src_1',
 	});
 	return {

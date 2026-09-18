@@ -108,6 +108,15 @@ browsers or machines.
 - The **trim box** is the finished item. **Bleed** extends the artwork past the trim
   (mirror-edge or solid fill).
 - The PDF sets `MediaBox` (media incl. marks), `BleedBox`, and `TrimBox`.
+- **Sheet imposition** (optional) lays 2 or 3 copies across a landscape A4 or US
+  Letter sheet, centred with a small gutter, and wraps the whole group in a single
+  registration-mark set. Enabling **Double-sided** adds a second page that is the
+  horizontal mirror of the first, for printing duplex (flip on long edge) so the
+  front and back registration and cut lines coincide.
+- Per-layer **Mirror on back** (default on) controls the reverse page: artwork
+  mirrors through the paper, while layers switched off (logos, wordmarks) keep
+  their placement but stay the right way round. The Data Matrix is likewise kept
+  readable so it still scans.
 - Cut polygons are derived as: source pixels → layer millimetres → **smooth →
   expand** → page millimetres. Smoothing runs before expansion so expansion
   guarantees final clearance.
@@ -136,6 +145,7 @@ src/lib/
   vector/smooth.ts    Chaikin polygon smoothing
   marks/              registration-mark generators + Data Matrix
   export/pdf.ts       pdf-lib PDF exporter
+  export/impose.ts    landscape multi-up sheet imposition maths
   export/svg.ts       cutter SVG exporter
   export/cut.ts       shared cut-outline builder
   project.ts          project file format (serialise / validate)

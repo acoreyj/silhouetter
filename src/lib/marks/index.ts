@@ -1,4 +1,4 @@
-import type { DocumentModel, MarkStyle, Point, Rect } from '$lib/types';
+import type { DocumentModel, MarkStyle, Point, Rect, Size } from '$lib/types';
 
 /**
  * Registration marks are described as resolution-independent primitives in the
@@ -130,6 +130,10 @@ function cornerBrackets(
 /**
  * Build the registration mark set for a document.
  *
+ * `area` selects the trim rectangle the marks wrap, defaulting to the document
+ * page. For a multi-up sheet the caller passes the bounding box of all imposed
+ * copies so a single mark set surrounds the whole group.
+ *
  * Notes on hardware support:
  * - Cricut's Design Space draws Print-Then-Cut sensor marks itself and warns
  *   that externally printed PDFs produce mis-sized marks. Prefer exporting the
@@ -138,10 +142,10 @@ function cornerBrackets(
  *   The brackets generated here are intended for alignment / third-party
  *   workflows and should be validated on real hardware.
  */
-export function buildMarkSet(doc: DocumentModel): MarkSet {
+export function buildMarkSet(doc: DocumentModel, area?: Size): MarkSet {
 	const { style, marginMm, sizeMm, lineWidthMm, dataMatrix, dataMatrixValue } = doc.registration;
-	const w = doc.page.width;
-	const h = doc.page.height;
+	const w = area?.width ?? doc.page.width;
+	const h = area?.height ?? doc.page.height;
 	const primitives: MarkPrimitive[] = [];
 
 	if (style === 'silhouette') {
