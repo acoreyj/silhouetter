@@ -4,7 +4,7 @@
 	import { store, getSource, brush, maskPixelSize } from '$lib/state.svelte';
 	import { addMaskStroke } from '$lib/actions';
 	import { buildMarkSet, computeMedia, markSetToPath, type MarkSet } from '$lib/marks';
-	import { buildTrimPolygons } from '$lib/geometry/shape';
+	import { buildTrimPolygons, polygonsBounds } from '$lib/geometry/shape';
 	import { pagePointToLayerLocal } from '$lib/geometry/transform';
 	import { polygonsToSvgPath } from '$lib/vector/trace';
 	import type { MaskLayer, MaskableLayer, Point } from '$lib/types';
@@ -17,7 +17,15 @@
 	const nodeMap = new Map<string, Konva.Group>();
 
 	const marks = $derived.by<MarkSet>(() => buildMarkSet(store.doc));
-	const media = $derived(computeMedia(store.doc, marks));
+	const trimPolygons = $derived.by(() => buildTrimPolygons(store.doc, getSource));
+	// The trim outline may overflow the page (bookmark head); let the media grow
+	// so the head is not clipped off the canvas.
+	const contentBounds = $derived(
+		store.doc.trimShape === 'rect'
+			? undefined
+			: (polygonsBounds(trimPolygons) ?? undefined),
+	);
+	const media = $derived(computeMedia(store.doc, marks, contentBounds));
 
 	const stageWidth = $derived(Math.max(1, media.widthMm * zoom));
 	const stageHeight = $derived(Math.max(1, media.heightMm * zoom));
@@ -33,7 +41,6 @@
 		return { x: p.x * zoom + originX, y: p.y * zoom + originY };
 	}
 
-	const trimPolygons = $derived.by(() => buildTrimPolygons(store.doc, getSource));
 	const isBookmark = $derived(store.doc.trimShape === 'bookmark');
 	const trimOutlinePath = $derived(
 		isBookmark

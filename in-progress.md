@@ -49,11 +49,11 @@ fit the overflowing head.
 - [x] `artworkRect()` + `renderArtwork()` render and clip the region covering
       the overflowing head.
 - [x] PDF exporter uses `contentBounds` + `artworkRect` for placement.
-- [ ] SVG exporter: same `contentBounds` + `artworkRect` placement.
-- [ ] Editor: pass `contentBounds` to `computeMedia`; make the
-      `outsideMaskPath` outer rect cover the grown media.
-- [ ] Inspector: `Head overflow (mm)` slider under Trim shape → bookmark.
-- [ ] `pnpm check`, `pnpm test`, `pnpm build`.
+- [x] SVG exporter: same `contentBounds` + `artworkRect` placement.
+- [x] Editor: pass `contentBounds` to `computeMedia`; `outsideMaskPath` outer
+      rect already covers the grown media (derived from `stageWidth/Height`).
+- [x] Inspector: `Head overflow (mm)` slider under Trim shape → bookmark.
+- [x] `pnpm check`, `pnpm test` (41 passing), `pnpm build`.
 
 ## Notes
 

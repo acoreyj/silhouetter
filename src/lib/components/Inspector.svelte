@@ -192,6 +192,19 @@
 					{/each}
 				</select>
 			</label>
+			<label>
+				Head overflow (mm)
+				<input
+					type="range"
+					min="0"
+					max="20"
+					step="0.5"
+					value={store.doc.bookmark.headOverflowMm}
+					onpointerdown={begin}
+					oninput={(e) => updateBookmarkLive({ headOverflowMm: Number(e.currentTarget.value) })}
+				/>
+				<span class="value">{store.doc.bookmark.headOverflowMm.toFixed(1)} mm</span>
+			</label>
 			<div class="row">
 				<label>
 					Notch depth (mm)

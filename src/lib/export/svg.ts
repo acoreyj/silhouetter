@@ -1,8 +1,9 @@
 import type { DocumentModel, Layer } from '$lib/types';
 import { buildMarkSet, computeMedia, type MarkSet, type MarkPrimitive } from '$lib/marks';
-import { renderArtwork, canvasToDataUrl } from '$lib/image/ops';
+import { renderArtwork, artworkRect, canvasToDataUrl } from '$lib/image/ops';
 import { polygonsToSvgPath } from '$lib/vector/trace';
 import { dataMatrixDataUrl } from '$lib/marks/datamatrix';
+import { buildTrimPolygons, polygonsBounds } from '$lib/geometry/shape';
 import { collectCutPolygons, shiftPolygons } from './cut';
 
 export interface SvgExportOptions {
@@ -40,22 +41,27 @@ export async function exportSvg(options: SvgExportOptions): Promise<string> {
 	const includeCutLine = options.includeCutLine ?? doc.showCutLine;
 
 	const marks = includeMarks ? buildMarkSet(doc) : EMPTY_MARKS;
-	const media = computeMedia(doc, marks);
+	const contentBounds =
+		doc.trimShape === 'rect'
+			? undefined
+			: (polygonsBounds(buildTrimPolygons(doc, getSource)) ?? undefined);
+	const media = computeMedia(doc, marks, contentBounds);
 	const tx = media.trimX;
 	const ty = media.trimY;
 
 	const parts: string[] = [];
 	parts.push(`<title>${escapeAttribute(doc.name)}</title>`);
 
-	// Artwork layer (raster at the export DPI).
+	// Artwork layer (raster at the export DPI). The canvas covers `artworkRect`
+	// (trim outline + bleed) so an overflowing bookmark head is included.
 	if (includeArtwork) {
 		const art = renderArtwork(doc, getSource, getMask);
 		const href = canvasToDataUrl(art);
-		const bleed = doc.bleed.enabled ? doc.bleed.amountMm : 0;
+		const rect = artworkRect(doc, getSource);
 		const w = (art.width / doc.dpi) * 25.4;
 		const h = (art.height / doc.dpi) * 25.4;
 		parts.push(
-			`<g id="artwork"><image x="${n(tx - bleed)}" y="${n(ty - bleed)}" ` +
+			`<g id="artwork"><image x="${n(tx + rect.x)}" y="${n(ty + rect.y)}" ` +
 				`width="${n(w)}" height="${n(h)}" preserveAspectRatio="none" href="${href}" /></g>`,
 		);
 	}
