@@ -45,6 +45,9 @@ dependency of `onnxruntime-web`); this is declared under `allowBuilds` in
 > Since SvelteKit 2.63, the SvelteKit adapter is configured in `vite.config.ts`
 > via the `sveltekit()` plugin rather than a separate `svelte.config.js`.
 
+For driving the editor in a real browser (e.g. letting an agent exercise a full
+import → segment → export run), see [`docs/chrome.md`](docs/chrome.md).
+
 ## Workflow
 
 1. **Import image** — pick a background and/or character image. Each becomes a layer
