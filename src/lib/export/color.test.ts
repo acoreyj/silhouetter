@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vite-plus/test';
 import { hexToRgb } from './color';
 
 describe('hexToRgb', () => {
@@ -15,7 +15,7 @@ describe('hexToRgb', () => {
 		expect(hexToRgb('not-a-colour', { r: 0.1, g: 0.2, b: 0.3 })).toEqual({
 			r: 0.1,
 			g: 0.2,
-			b: 0.3
+			b: 0.3,
 		});
 	});
 });

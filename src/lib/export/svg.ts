@@ -1,4 +1,4 @@
-import type { DocumentModel, SubjectLayer } from '$lib/types';
+import type { DocumentModel, Layer } from '$lib/types';
 import { buildMarkSet, computeMedia, type MarkSet, type MarkPrimitive } from '$lib/marks';
 import { renderArtwork, canvasToDataUrl } from '$lib/image/ops';
 import { polygonsToSvgPath } from '$lib/vector/trace';
@@ -8,7 +8,7 @@ import { collectCutPolygons, shiftPolygons } from './cut';
 export interface SvgExportOptions {
 	doc: DocumentModel;
 	getSource: (id: string) => HTMLImageElement | undefined;
-	getMask: (layer: SubjectLayer) => HTMLImageElement | undefined;
+	getMask: (layer: Layer) => HTMLImageElement | undefined;
 	includeArtwork?: boolean;
 	includeMarks?: boolean;
 	includeCutLine?: boolean;
@@ -17,7 +17,7 @@ export interface SvgExportOptions {
 const EMPTY_MARKS: MarkSet = {
 	primitives: [],
 	dataMatrix: null,
-	bounds: { x: 0, y: 0, width: 0, height: 0 }
+	bounds: { x: 0, y: 0, width: 0, height: 0 },
 };
 
 const n = (value: number) => {
@@ -56,7 +56,7 @@ export async function exportSvg(options: SvgExportOptions): Promise<string> {
 		const h = (art.height / doc.dpi) * 25.4;
 		parts.push(
 			`<g id="artwork"><image x="${n(tx - bleed)}" y="${n(ty - bleed)}" ` +
-				`width="${n(w)}" height="${n(h)}" preserveAspectRatio="none" href="${href}" /></g>`
+				`width="${n(w)}" height="${n(h)}" preserveAspectRatio="none" href="${href}" /></g>`,
 		);
 	}
 
@@ -67,15 +67,15 @@ export async function exportSvg(options: SvgExportOptions): Promise<string> {
 			const stroke = `fill="none" stroke="#000000" stroke-width="${n(p.type === 'line' || p.type === 'polyline' ? p.width : p.strokeWidth)}"`;
 			if (p.type === 'line') {
 				markParts.push(
-					`<line x1="${n(tx + p.x1)}" y1="${n(ty + p.y1)}" x2="${n(tx + p.x2)}" y2="${n(ty + p.y2)}" ${stroke} stroke-linecap="round" />`
+					`<line x1="${n(tx + p.x1)}" y1="${n(ty + p.y1)}" x2="${n(tx + p.x2)}" y2="${n(ty + p.y2)}" ${stroke} stroke-linecap="round" />`,
 				);
 			} else if (p.type === 'rect') {
 				markParts.push(
-					`<rect x="${n(tx + p.x)}" y="${n(ty + p.y)}" width="${n(p.width)}" height="${n(p.height)}" ${stroke} />`
+					`<rect x="${n(tx + p.x)}" y="${n(ty + p.y)}" width="${n(p.width)}" height="${n(p.height)}" ${stroke} />`,
 				);
 			} else if (p.type === 'circle') {
 				markParts.push(
-					`<circle cx="${n(tx + p.cx)}" cy="${n(ty + p.cy)}" r="${n(p.r)}" ${stroke} />`
+					`<circle cx="${n(tx + p.cx)}" cy="${n(ty + p.cy)}" r="${n(p.r)}" ${stroke} />`,
 				);
 			} else {
 				const points = p.points.map((pt) => `${n(tx + pt.x)},${n(ty + pt.y)}`).join(' ');
@@ -90,7 +90,7 @@ export async function exportSvg(options: SvgExportOptions): Promise<string> {
 		const dm = marks.dataMatrix;
 		const href = await dataMatrixDataUrl(dm.value);
 		parts.push(
-			`<image x="${n(tx + dm.x)}" y="${n(ty + dm.y)}" width="${n(dm.size)}" height="${n(dm.size)}" href="${href}" />`
+			`<image x="${n(tx + dm.x)}" y="${n(ty + dm.y)}" width="${n(dm.size)}" height="${n(dm.size)}" href="${href}" />`,
 		);
 	}
 
@@ -102,7 +102,7 @@ export async function exportSvg(options: SvgExportOptions): Promise<string> {
 			const d = polygonsToSvgPath(shifted, 3);
 			if (d) {
 				parts.push(
-					`<g id="cut"><path d="${d}" fill="none" stroke="${doc.cutLineColor || '#ff00aa'}" stroke-width="0.25" stroke-linejoin="round" /></g>`
+					`<g id="cut"><path d="${d}" fill="none" stroke="${doc.cutLineColor || '#ff00aa'}" stroke-width="0.25" stroke-linejoin="round" /></g>`,
 				);
 			}
 		}

@@ -35,7 +35,7 @@ function decimate(ring: Point[], maxPoints: number): Point[] {
 export function smoothPolygons(
 	polygons: Point[][],
 	amount: number,
-	maxPointsPerRing = 4000
+	maxPointsPerRing = 4000,
 ): Point[][] {
 	const a = clamp(amount, 0, 1);
 	if (a < 0.05) return polygons;

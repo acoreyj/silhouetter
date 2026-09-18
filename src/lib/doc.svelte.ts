@@ -1,4 +1,10 @@
-import type { DocumentModel, ImageSource, Layer, RegistrationConfig } from '$lib/types';
+import type {
+	BookmarkConfig,
+	DocumentModel,
+	ImageSource,
+	Layer,
+	RegistrationConfig,
+} from '$lib/types';
 
 export const DEFAULT_PAGE_SIZES: { label: string; width: number; height: number }[] = [
 	{ label: 'Bookmark 50 × 150 mm', width: 50, height: 150 },
@@ -6,7 +12,7 @@ export const DEFAULT_PAGE_SIZES: { label: string; width: number; height: number 
 	{ label: 'A6 (105 × 148 mm)', width: 105, height: 148 },
 	{ label: 'A5 (148 × 210 mm)', width: 148, height: 210 },
 	{ label: 'A4 (210 × 297 mm)', width: 210, height: 297 },
-	{ label: 'US Letter (216 × 279 mm)', width: 215.9, height: 279.4 }
+	{ label: 'US Letter (216 × 279 mm)', width: 215.9, height: 279.4 },
 ];
 
 export const DPI_PRESETS = [150, 300, 600];
@@ -18,7 +24,17 @@ export function defaultRegistration(): RegistrationConfig {
 		sizeMm: 5,
 		lineWidthMm: 0.2,
 		dataMatrix: false,
-		dataMatrixValue: 'SILHOUETTER'
+		dataMatrixValue: 'SILHOUETTER',
+	};
+}
+
+export function defaultBookmark(): BookmarkConfig {
+	return {
+		baseFraction: 0.75,
+		subjectLayerId: null,
+		notchDepthMm: 6,
+		cornerRadiusMm: 2,
+		headOverflowMm: 0,
 	};
 }
 
@@ -26,13 +42,15 @@ export function createDefaultDocument(): DocumentModel {
 	return {
 		name: 'Untitled bookmark',
 		page: { width: 50, height: 150 },
+		trimShape: 'rect',
+		bookmark: defaultBookmark(),
 		dpi: 300,
 		bleed: { enabled: true, amountMm: 3, mode: 'mirror', solidColor: '#ffffff' },
 		registration: defaultRegistration(),
 		layers: [],
 		background: '',
 		showCutLine: true,
-		cutLineColor: '#ff00aa'
+		cutLineColor: '#ff00aa',
 	};
 }
 

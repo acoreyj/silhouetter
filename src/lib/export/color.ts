@@ -18,6 +18,6 @@ export function hexToRgb(hex: string, fallback: RGB = { r: 0, g: 0, b: 0 }): RGB
 	return {
 		r: parseInt(value.slice(0, 2), 16) / 255,
 		g: parseInt(value.slice(2, 4), 16) / 255,
-		b: parseInt(value.slice(4, 6), 16) / 255
+		b: parseInt(value.slice(4, 6), 16) / 255,
 	};
 }

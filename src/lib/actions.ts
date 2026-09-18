@@ -1,20 +1,23 @@
-import { store, getSource, getMask, loadSource, loadMask } from './state.svelte';
-import { newId } from './doc.svelte';
-import type { ImageLayer, Layer, SubjectLayer } from './types';
 import {
-	createCanvas,
-	get2d,
-	probeImage,
-	renderArtwork,
-	canvasToPngBytes
-} from './image/ops';
+	store,
+	getSource,
+	getMask,
+	loadSource,
+	applyMaskStrokes,
+	applyMaskLayer,
+	maskPixelSize,
+	invalidateMask,
+} from './state.svelte';
+import { newId } from './doc.svelte';
+import type { ImageLayer, Layer, MaskLayer, MaskStroke, MaskableLayer, SubjectLayer } from './types';
+import { createCanvas, get2d, probeImage, renderArtwork, canvasToPngBytes } from './image/ops';
+import { drawInPixelSpace } from './geometry/transform';
 import { segmentForeground, type SegmentProgress } from './segment/segment';
 import { traceMask } from './vector/trace';
 import { THRESHOLD_AUTO } from '@cadit-app/potrace-ts';
 
 function triggerDownload(data: Blob | Uint8Array | string, filename: string, type: string): void {
-	const blob =
-		data instanceof Blob ? data : new Blob([data as BlobPart], { type });
+	const blob = data instanceof Blob ? data : new Blob([data as BlobPart], { type });
 	const url = URL.createObjectURL(blob);
 	const a = document.createElement('a');
 	a.href = url;
@@ -59,7 +62,7 @@ export async function importImage(file: File): Promise<ImageLayer> {
 		width: w,
 		height: h,
 		rotation: 0,
-		sourceId: source.id
+		sourceId: source.id,
 	};
 	store.addLayer(layer);
 	return layer;
@@ -75,12 +78,10 @@ export interface SegmentLayerResult {
  * Run background removal on a layer, derive its cut outline and promote it to a
  * subject layer.
  */
-export async function segmentLayer(
-	layerId: string,
-	onProgress?: SegmentProgress
-): Promise<Layer> {
+export async function segmentLayer(layerId: string, onProgress?: SegmentProgress): Promise<Layer> {
 	const layer = store.doc.layers.find((l) => l.id === layerId);
 	if (!layer) throw new Error('Layer not found');
+	if (layer.kind === 'mask') throw new Error('Select an image layer to remove its background.');
 	const source = store.sources[layer.sourceId];
 	if (!source) throw new Error('Missing image source for layer');
 
@@ -101,9 +102,10 @@ export async function segmentLayer(
 	const polygons = traceMask(result.maskCanvas, {
 		turdsize: traceDespeckle,
 		alphamax: 1.0,
-		threshold: traceAutoThreshold ? THRESHOLD_AUTO : traceThreshold
+		threshold: traceAutoThreshold ? THRESHOLD_AUTO : traceThreshold,
 	});
 
+	invalidateMask(layer.id);
 	store.updateLayer(layer.id, {
 		kind: 'subject',
 		maskDataUrl: result.maskDataUrl,
@@ -112,24 +114,149 @@ export async function segmentLayer(
 		cutSmooth,
 		traceThreshold,
 		traceAutoThreshold,
-		traceDespeckle
+		traceDespeckle,
+		maskStrokes: [],
 	} as Partial<Layer>);
 
-	await loadMask(layer.id, result.maskDataUrl);
+	const segmented = store.doc.layers.find((l) => l.id === layerId);
+	if (segmented && segmented.kind === 'subject') await applyMaskStrokes(segmented);
+
+	// Give the design an editable punch mask aligned to the subject so the
+	// removed background can then be carved out of every layer at once.
+	const subject = store.doc.layers.find((l) => l.id === layerId);
+	ensureMaskLayer(subject);
 
 	const updated = store.doc.layers.find((l) => l.id === layerId);
 	if (!updated) throw new Error('Layer disappeared during segmentation');
 	return updated;
 }
 
-/** Load a subject layer's mask into a canvas ready for tracing. */
+/** Natural pixel size of a layer's bitmap, if it has one. */
+function layerPixelSize(layer: Layer): { width: number; height: number } {
+	if (layer.kind === 'mask') return { width: layer.pixelWidth, height: layer.pixelHeight };
+	const source = getSource(layer.sourceId);
+	return { width: source?.naturalWidth ?? 1, height: source?.naturalHeight ?? 1 };
+}
+
+/** Create an empty document mask layer, optionally aligned to a reference layer. */
+export function addMaskLayer(reference?: Layer): MaskLayer {
+	const page = store.doc.page;
+	const ref = reference && reference.kind !== 'mask' ? reference : undefined;
+	const pxPerMm = store.doc.dpi / 25.4;
+	const pixels = ref
+		? layerPixelSize(ref)
+		: {
+				width: Math.max(1, Math.round(page.width * pxPerMm)),
+				height: Math.max(1, Math.round(page.height * pxPerMm)),
+			};
+	const layer: MaskLayer = {
+		id: newId('layer'),
+		kind: 'mask',
+		name: 'Mask',
+		visible: true,
+		locked: false,
+		opacity: 1,
+		x: ref ? ref.x : 0,
+		y: ref ? ref.y : 0,
+		width: ref ? ref.width : page.width,
+		height: ref ? ref.height : page.height,
+		rotation: ref ? ref.rotation : 0,
+		pixelWidth: Math.max(1, Math.round(pixels.width)),
+		pixelHeight: Math.max(1, Math.round(pixels.height)),
+		maskDataUrl: null,
+		maskStrokes: [],
+	};
+	store.addLayer(layer);
+	return layer;
+}
+
+/** Return the document's mask layer, creating one if none exists yet. */
+export function ensureMaskLayer(reference?: Layer): MaskLayer {
+	const existing = store.doc.layers.find((l): l is MaskLayer => l.kind === 'mask');
+	if (existing) return existing;
+	return addMaskLayer(reference);
+}
+
+/** Punch every visible mask layer's holes out of a canvas (in `target` space). */
+async function punchHoles(ctx: CanvasRenderingContext2D, target: MaskableLayer): Promise<void> {
+	const size = maskPixelSize(target);
+	const toFrame = { layer: target, pixelWidth: size.width, pixelHeight: size.height };
+	for (const layer of store.doc.layers) {
+		if (layer.kind !== 'mask' || !layer.visible) continue;
+		const hole = getMask(layer.id);
+		if (!hole) continue;
+		const maskSize = maskPixelSize(layer);
+		const fromFrame = {
+			layer,
+			pixelWidth: maskSize.width,
+			pixelHeight: maskSize.height,
+		};
+		ctx.globalCompositeOperation = 'destination-out';
+		drawInPixelSpace(ctx, hole as unknown as CanvasImageSource, fromFrame, toFrame);
+	}
+	ctx.globalCompositeOperation = 'source-over';
+}
+
+/** Load a subject layer's effective (edited) mask into a canvas for tracing. */
 async function maskCanvasForLayer(layer: SubjectLayer) {
-	const stored = layer.maskDataUrl;
-	if (!stored) throw new Error('Run background removal before tracing.');
-	const mask = getMask(layer.id) ?? (await loadMask(layer.id, stored));
+	if (!layer.maskDataUrl) throw new Error('Run background removal before tracing.');
+	const mask = (await applyMaskStrokes(layer)) ?? getMask(layer.id);
+	if (!mask) throw new Error('Run background removal before tracing.');
 	const canvas = createCanvas(mask.naturalWidth, mask.naturalHeight);
-	get2d(canvas, true).drawImage(mask, 0, 0);
+	const ctx = get2d(canvas, true);
+	ctx.drawImage(mask, 0, 0);
+	// The document mask punches through subjects too, so the cut must follow it.
+	for (const candidate of store.doc.layers) {
+		if (candidate.kind === 'mask' && candidate.visible && !getMask(candidate.id)) {
+			await applyMaskLayer(candidate);
+		}
+	}
+	await punchHoles(ctx, layer);
 	return canvas;
+}
+
+/**
+ * Append a brush stroke to a subject's keep mask or a mask layer's punch mask
+ * and refresh the effective mask.
+ */
+export async function addMaskStroke(layerId: string, stroke: MaskStroke): Promise<void> {
+	const layer = store.doc.layers.find((l) => l.id === layerId);
+	if (!layer || (layer.kind !== 'subject' && layer.kind !== 'mask')) {
+		throw new Error('Select a subject or mask layer first.');
+	}
+	store.commit((d) => {
+		const l = d.layers.find((x) => x.id === layerId);
+		if (l && (l.kind === 'subject' || l.kind === 'mask')) l.maskStrokes.push(stroke);
+	});
+	await refreshMaskLayer(layerId);
+}
+
+/** Remove all brush strokes from a subject's mask or a mask layer. */
+export async function clearMaskStrokes(layerId: string): Promise<void> {
+	const layer = store.doc.layers.find((l) => l.id === layerId);
+	if (!layer || (layer.kind !== 'subject' && layer.kind !== 'mask')) return;
+	store.commit((d) => {
+		const l = d.layers.find((x) => x.id === layerId);
+		if (l && (l.kind === 'subject' || l.kind === 'mask')) l.maskStrokes = [];
+	});
+	await refreshMaskLayer(layerId);
+}
+
+/** Recompute a maskable layer's mask and re-trace every subject's outline. */
+async function refreshMaskLayer(layerId: string): Promise<void> {
+	const layer = store.doc.layers.find((l) => l.id === layerId);
+	if (layer && (layer.kind === 'subject' || layer.kind === 'mask')) {
+		if (layer.kind === 'mask') await applyMaskLayer(layer);
+		else await applyMaskStrokes(layer);
+	}
+	await retraceSubjects();
+}
+
+/** Re-trace every subject layer so its cut line follows the current masks. */
+export async function retraceSubjects(): Promise<void> {
+	for (const layer of store.doc.layers) {
+		if (layer.kind === 'subject' && layer.maskDataUrl) await retraceLayer(layer.id);
+	}
 }
 
 /**
@@ -145,7 +272,7 @@ export async function retraceLayer(layerId: string): Promise<void> {
 	const polygons = traceMask(canvas, {
 		turdsize: layer.traceDespeckle,
 		alphamax: 1.0,
-		threshold: layer.traceAutoThreshold ? THRESHOLD_AUTO : layer.traceThreshold
+		threshold: layer.traceAutoThreshold ? THRESHOLD_AUTO : layer.traceThreshold,
 	});
 
 	store.updateLayer(layerId, { cutPolygons: polygons } as Partial<Layer>);
@@ -164,7 +291,7 @@ export async function downloadPdf(flags: ExportFlags = {}): Promise<void> {
 		doc: store.doc,
 		getSource,
 		getMask: (layer) => getMask(layer.id),
-		...flags
+		...flags,
 	});
 	triggerDownload(bytes, safeName('pdf'), 'application/pdf');
 }
@@ -175,7 +302,7 @@ export async function downloadSvg(flags: ExportFlags = {}): Promise<void> {
 		doc: store.doc,
 		getSource,
 		getMask: (layer) => getMask(layer.id),
-		...flags
+		...flags,
 	});
 	triggerDownload(svg, safeName('svg'), 'image/svg+xml');
 }
@@ -190,6 +317,12 @@ export async function downloadPng(): Promise<void> {
 export function renderPreviewDataUrl(scale = 1): string {
 	const artwork = renderArtwork(store.doc, getSource, (layer) => getMask(layer.id));
 	const canvas = createCanvas(artwork.width * scale, artwork.height * scale);
-	get2d(canvas).drawImage(artwork as unknown as CanvasImageSource, 0, 0, canvas.width, canvas.height);
+	get2d(canvas).drawImage(
+		artwork as unknown as CanvasImageSource,
+		0,
+		0,
+		canvas.width,
+		canvas.height,
+	);
 	return (canvas as HTMLCanvasElement).toDataURL?.('image/png') ?? '';
 }

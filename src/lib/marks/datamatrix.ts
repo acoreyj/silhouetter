@@ -19,7 +19,7 @@ export async function renderDataMatrix(value: string, scale = 8): Promise<HTMLCa
 		text: value || 'SILHOUETTER',
 		scale,
 		padding: 2,
-		includetext: false
+		includetext: false,
 	});
 	return canvas;
 }

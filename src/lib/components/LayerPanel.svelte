@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { store } from '$lib/state.svelte';
+	import { addMaskLayer } from '$lib/actions';
 
 	const layers = $derived([...store.doc.layers].reverse());
 
@@ -7,10 +8,18 @@
 		const layer = store.doc.layers.find((l) => l.id === id);
 		if (layer) store.updateLayer(id, { visible: !layer.visible });
 	}
+
+	function onAddMask() {
+		const reference = store.selected ?? undefined;
+		addMaskLayer(reference);
+	}
 </script>
 
 <div class="panel">
-	<h2>Layers</h2>
+	<div class="head">
+		<h2>Layers</h2>
+		<button class="add" title="Add mask layer" onclick={onAddMask}>+ Mask</button>
+	</div>
 	{#if store.doc.layers.length === 0}
 		<p class="empty">Import an image to begin.</p>
 	{:else}
@@ -42,6 +51,20 @@
 <style>
 	.panel {
 		padding: 0.75rem;
+	}
+	.head {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 0.5rem;
+		margin-bottom: 0.5rem;
+	}
+	.head h2 {
+		margin: 0;
+	}
+	.add {
+		font-size: 0.7rem;
+		padding: 0.15rem 0.4rem;
 	}
 	h2 {
 		font-size: 0.75rem;

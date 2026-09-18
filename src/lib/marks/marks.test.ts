@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vite-plus/test';
 import { buildMarkSet, computeMedia, markSetToPath } from './index';
 import { createDefaultDocument } from '$lib/doc.svelte';
 import type { DocumentModel } from '$lib/types';
@@ -10,7 +10,7 @@ function docWith(patch: Partial<DocumentModel>): DocumentModel {
 describe('buildMarkSet', () => {
 	it('produces four crosses for the generic style', () => {
 		const doc = docWith({
-			registration: { ...createDefaultDocument().registration, style: 'generic' }
+			registration: { ...createDefaultDocument().registration, style: 'generic' },
 		});
 		const marks = buildMarkSet(doc);
 		// Each cross is two lines.
@@ -21,7 +21,7 @@ describe('buildMarkSet', () => {
 
 	it('produces eight arms for the silhouette style', () => {
 		const doc = docWith({
-			registration: { ...createDefaultDocument().registration, style: 'silhouette' }
+			registration: { ...createDefaultDocument().registration, style: 'silhouette' },
 		});
 		const marks = buildMarkSet(doc);
 		expect(marks.primitives).toHaveLength(8);
@@ -29,7 +29,7 @@ describe('buildMarkSet', () => {
 
 	it('produces a sensor rectangle plus brackets for cricut', () => {
 		const doc = docWith({
-			registration: { ...createDefaultDocument().registration, style: 'cricut' }
+			registration: { ...createDefaultDocument().registration, style: 'cricut' },
 		});
 		const marks = buildMarkSet(doc);
 		expect(marks.primitives).toHaveLength(9);
@@ -37,7 +37,7 @@ describe('buildMarkSet', () => {
 
 	it('produces nothing when disabled', () => {
 		const doc = docWith({
-			registration: { ...createDefaultDocument().registration, style: 'none' }
+			registration: { ...createDefaultDocument().registration, style: 'none' },
 		});
 		expect(buildMarkSet(doc).primitives).toHaveLength(0);
 	});
@@ -52,8 +52,8 @@ describe('computeMedia', () => {
 				...createDefaultDocument().registration,
 				style: 'generic',
 				marginMm: 5,
-				sizeMm: 5
-			}
+				sizeMm: 5,
+			},
 		});
 		const marks = buildMarkSet(doc);
 		const media = computeMedia(doc, marks);
@@ -67,7 +67,7 @@ describe('computeMedia', () => {
 		const doc = docWith({
 			page: { width: 50, height: 150 },
 			bleed: { enabled: true, amountMm: 3, mode: 'mirror', solidColor: '#fff' },
-			registration: { ...createDefaultDocument().registration, style: 'none' }
+			registration: { ...createDefaultDocument().registration, style: 'none' },
 		});
 		const marks = buildMarkSet(doc);
 		const media = computeMedia(doc, marks);
@@ -80,7 +80,7 @@ describe('computeMedia', () => {
 describe('markSetToPath', () => {
 	it('emits a path with moves and closes for cricut', () => {
 		const doc = docWith({
-			registration: { ...createDefaultDocument().registration, style: 'cricut' }
+			registration: { ...createDefaultDocument().registration, style: 'cricut' },
 		});
 		const path = markSetToPath(buildMarkSet(doc));
 		expect(path.startsWith('M ')).toBe(true);

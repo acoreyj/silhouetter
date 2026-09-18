@@ -1,7 +1,5 @@
 import type { DocumentModel, Point, SubjectLayer } from '$lib/types';
-import { polygonsToMm, transformPolygonsToPage } from '$lib/image/ops';
-import { offsetPolygons } from '$lib/vector/trace';
-import { smoothPolygons } from '$lib/vector/smooth';
+import { buildSubjectOutline, buildTrimPolygons } from '$lib/geometry/shape';
 
 /**
  * Build a single subject layer's cut outline in page (trim) millimetres.
@@ -11,30 +9,22 @@ import { smoothPolygons } from '$lib/vector/smooth';
  * expansion guarantees the final clearance.
  */
 export function buildCutPolygons(layer: SubjectLayer, source: HTMLImageElement): Point[][] {
-	if (layer.cutPolygons.length === 0) return [];
-	const local = polygonsToMm(
-		layer.cutPolygons,
-		source.naturalWidth,
-		source.naturalHeight,
-		layer
-	);
-	const smoothed = smoothPolygons(local, layer.cutSmooth ?? 0);
-	const expanded = offsetPolygons(smoothed, Math.max(0, layer.cutExpandMm ?? 0), {
-		jointType: 'jtRound',
-		precision: 0.02
-	});
-	return transformPolygonsToPage(expanded, layer);
+	return buildSubjectOutline(layer, source);
 }
 
 /**
- * Collect every subject layer's cut outline, converted from source pixels to
- * page (trim) millimetres with the layer transform, smoothing and expansion
- * applied.
+ * Collect the cut outline a cutter should follow, in page (trim) millimetres.
+ *
+ * For a bookmark trim the cut is the whole silhouette (plain base unioned with
+ * the head outline). For a rectangular trim every visible subject layer
+ * contributes its own outline.
  */
 export function collectCutPolygons(
 	doc: DocumentModel,
-	getSource: (id: string) => HTMLImageElement | undefined
+	getSource: (id: string) => HTMLImageElement | undefined,
 ): Point[][] {
+	if (doc.trimShape === 'bookmark') return buildTrimPolygons(doc, getSource);
+
 	const out: Point[][] = [];
 	for (const layer of doc.layers) {
 		if (layer.kind !== 'subject' || !layer.visible) continue;
@@ -47,10 +37,6 @@ export function collectCutPolygons(
 }
 
 /** Shift page-coordinate points into media coordinates. */
-export function shiftPolygons(
-	polygons: Point[][],
-	dx: number,
-	dy: number
-): Point[][] {
+export function shiftPolygons(polygons: Point[][], dx: number, dy: number): Point[][] {
 	return polygons.map((poly) => poly.map((p) => ({ x: p.x + dx, y: p.y + dy })));
 }

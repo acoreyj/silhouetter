@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vite-plus/test';
 import { MM_PER_INCH, PT_PER_INCH, clamp, mmToPt, mmToPx, ptToMm, pxToMm, round } from './units';
 
 describe('unit conversions', () => {

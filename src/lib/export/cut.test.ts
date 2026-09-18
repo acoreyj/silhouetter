@@ -1,5 +1,6 @@
-import { describe, expect, it } from 'vitest';
-import { buildCutPolygons } from './cut';
+import { describe, expect, it } from 'vite-plus/test';
+import { buildCutPolygons, collectCutPolygons } from './cut';
+import { createDefaultDocument } from '$lib/doc.svelte';
 import type { SubjectLayer } from '$lib/types';
 
 function squareSubject(patch: Partial<SubjectLayer> = {}): SubjectLayer {
@@ -22,15 +23,16 @@ function squareSubject(patch: Partial<SubjectLayer> = {}): SubjectLayer {
 				{ x: 1, y: 1 },
 				{ x: 9, y: 1 },
 				{ x: 9, y: 9 },
-				{ x: 1, y: 9 }
-			]
+				{ x: 1, y: 9 },
+			],
 		],
 		cutExpandMm: 0,
 		cutSmooth: 0,
 		traceThreshold: 128,
 		traceAutoThreshold: false,
 		traceDespeckle: 8,
-		...patch
+		maskStrokes: [],
+		...patch,
 	};
 }
 
@@ -65,5 +67,38 @@ describe('buildCutPolygons', () => {
 
 	it('returns nothing when there is no trace', () => {
 		expect(buildCutPolygons(squareSubject({ cutPolygons: [] }), source)).toEqual([]);
+	});
+
+	it('collects every visible subject outline for a rectangular trim', () => {
+		const doc = createDefaultDocument();
+		doc.layers = [squareSubject()];
+		const result = collectCutPolygons(doc, () => source);
+		expect(result.length).toBeGreaterThanOrEqual(1);
+	});
+
+	it('collects the combined document shape for a bookmark trim', () => {
+		const doc = createDefaultDocument();
+		doc.page = { width: 10, height: 10 };
+		doc.trimShape = 'bookmark';
+		doc.bookmark = { ...doc.bookmark, baseFraction: 0.5, subjectLayerId: 'layer_1' };
+		doc.layers = [
+			squareSubject({
+				width: 10,
+				height: 10,
+				cutPolygons: [
+					[
+						{ x: 0, y: 0 },
+						{ x: 10, y: 0 },
+						{ x: 10, y: 10 },
+						{ x: 0, y: 10 },
+					],
+				],
+			}),
+		];
+		const result = collectCutPolygons(doc, () => source);
+		const ys = result.flat().map((p) => p.y);
+		// The head outline reaches the top of the page and the base reaches the bottom.
+		expect(Math.min(...ys)).toBeLessThan(0.5);
+		expect(Math.max(...ys)).toBeCloseTo(10, 0);
 	});
 });

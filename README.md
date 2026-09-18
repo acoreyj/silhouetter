@@ -10,17 +10,17 @@ server component.
 
 ## Stack
 
-| Concern | Choice |
-| --- | --- |
-| App shell | SvelteKit + `@sveltejs/adapter-static`, client-only (`ssr = false`) |
-| Editor / layers | `konva` + `svelte-konva` (Svelte 5 runes) |
-| Raster ops | Canvas 2D / `OffscreenCanvas` |
-| Background removal | `@imgly/background-removal` (ONNX Runtime Web, WebGPU) |
-| Mask → vector | `@cadit-app/potrace-ts` (MIT) |
-| Offset / boolean | `@doodle3d/clipper-js` |
-| PDF | `pdf-lib` |
-| Data Matrix | `bwip-js` (lazy-loaded) |
-| Toolchain | vite-plus for Node, **pnpm** for packages |
+| Concern            | Choice                                                              |
+| ------------------ | ------------------------------------------------------------------- |
+| App shell          | SvelteKit + `@sveltejs/adapter-static`, client-only (`ssr = false`) |
+| Editor / layers    | `konva` + `svelte-konva` (Svelte 5 runes)                           |
+| Raster ops         | Canvas 2D / `OffscreenCanvas`                                       |
+| Background removal | `@imgly/background-removal` (ONNX Runtime Web, WebGPU)              |
+| Mask → vector      | `@cadit-app/potrace-ts` (MIT)                                       |
+| Offset / boolean   | `@doodle3d/clipper-js`                                              |
+| PDF                | `pdf-lib`                                                           |
+| Data Matrix        | `bwip-js` (lazy-loaded)                                             |
+| Toolchain          | vite-plus for Node, **pnpm** for packages                           |
 
 See [`docs/decisions.md`](docs/decisions.md) for the reasoning behind each choice.
 
@@ -48,18 +48,25 @@ dependency of `onnxruntime-web`); this is declared under `allowBuilds` in
 ## Workflow
 
 1. **Import image** — pick a background and/or character image. Each becomes a layer
-   fitted to the page.
+   fitted to the page; use _Fill page (cover)_ on a background layer.
 2. **Remove background** — on a selected layer, runs the segmentation model locally
-   and promotes the layer to a *subject* layer with an alpha mask and a traced cut
+   and promotes the layer to a _subject_ layer with an alpha mask and a traced cut
    outline. The first run downloads the model (~40 MB, cached afterwards).
-3. **Adjust the cut** — *Expand* (mm) grows the outline, *Smoothing* rounds sharp
+3. **Edit the mask** (optional) — toggle **Paint mask** and brush to _Erase_ or
+   _Restore_ parts of the mask (e.g. keep only a head). Edits are stored as strokes
+   and applied on top of the segmentation mask.
+4. **Adjust the cut** — _Expand_ (mm) grows the outline, _Smoothing_ rounds sharp
    corners. Both update the preview live.
-4. **Re-trace** — tune *Threshold* (or auto/Otsu) and *Despeckle*, then click
-   **Re-trace outline**. This re-traces from the stored mask without re-running the
-   model.
-5. **Page & marks** — set page size (bookmark presets or custom), DPI, bleed, and a
+5. **Re-trace** — tune _Threshold_ (or auto/Otsu) and _Despeckle_, then click
+   **Re-trace outline**. This re-traces from the stored mask (including brush edits)
+   without re-running the model.
+6. **Trim shape** — keep the rectangular page or switch to a **Bookmark
+   silhouette**: set the base/head split, head layer, notch depth and corner radius.
+   The top follows the head's expanded/smoothed outline; artwork is clipped and the
+   cut line follows the combined shape.
+7. **Page & marks** — set page size (bookmark presets or custom), DPI, bleed, and a
    registration-mark style.
-6. **Export** — **PDF** (print), **SVG** (cutter software), or **PNG** (flattened
+8. **Export** — **PDF** (print), **SVG** (cutter software), or **PNG** (flattened
    raster).
 
 ## Print model
@@ -72,6 +79,11 @@ dependency of `onnxruntime-web`); this is declared under `allowBuilds` in
 - Cut polygons are derived as: source pixels → layer millimetres → **smooth →
   expand** → page millimetres. Smoothing runs before expansion so expansion
   guarantees final clearance.
+- For a **bookmark silhouette** the document trim outline is the plain bookmark base
+  unioned with the head layer's smoothed + expanded outline; artwork is clipped to
+  it (offset outwards by the bleed) and the cut line follows the combined shape.
+  PDF's `TrimBox` stays the rectangular bounding box — the vector cut path is the
+  authoritative silhouette (SVG is exact).
 
 ## Project layout
 
@@ -80,11 +92,14 @@ src/lib/
   units.ts            mm / pt / px conversions
   types.ts            document + layer model
   doc.svelte.ts       runes store with snapshot undo/redo
-  state.svelte.ts     singleton store + image/mask caches
-  actions.ts          import, segment, re-trace, export actions
-  image/ops.ts        flatten at DPI, crop, mask, bleed
+  state.svelte.ts     singleton store + image/mask caches + brush tool state
+  actions.ts          import, segment, mask strokes, re-trace, export actions
+  image/canvas.ts     leaf canvas helpers (no project imports)
+  image/ops.ts        flatten at DPI, mask compositing, bleed, shape clip
+  geometry/transform.ts  source/layer/page point mapping
+  geometry/shape.ts   bookmark base + derived document trim outline
   segment/segment.ts  background-removal wrapper
-  vector/trace.ts     potrace wrapper + clipper offset + SVG paths
+  vector/trace.ts     potrace wrapper + clipper offset/booleans + SVG paths
   vector/smooth.ts    Chaikin polygon smoothing
   marks/              registration-mark generators + Data Matrix
   export/pdf.ts       pdf-lib PDF exporter

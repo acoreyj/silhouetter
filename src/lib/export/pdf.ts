@@ -1,17 +1,18 @@
 import { PDFDocument, LineCapStyle, rgb } from 'pdf-lib';
-import type { DocumentModel, SubjectLayer } from '$lib/types';
+import type { DocumentModel, Layer } from '$lib/types';
 import { buildMarkSet, computeMedia, type MarkSet, type MarkPrimitive } from '$lib/marks';
 import { mmToPt } from '$lib/units';
-import { renderArtwork, canvasToPngBytes } from '$lib/image/ops';
+import { renderArtwork, artworkRect, canvasToPngBytes } from '$lib/image/ops';
 import { polygonsToSvgPath } from '$lib/vector/trace';
 import { renderDataMatrix } from '$lib/marks/datamatrix';
 import { collectCutPolygons, shiftPolygons } from './cut';
 import { hexToRgb } from './color';
+import { buildTrimPolygons, polygonsBounds } from '$lib/geometry/shape';
 
 export interface PdfExportOptions {
 	doc: DocumentModel;
 	getSource: (id: string) => HTMLImageElement | undefined;
-	getMask: (layer: SubjectLayer) => HTMLImageElement | undefined;
+	getMask: (layer: Layer) => HTMLImageElement | undefined;
 	includeArtwork?: boolean;
 	includeMarks?: boolean;
 	includeCutLine?: boolean;
@@ -20,7 +21,7 @@ export interface PdfExportOptions {
 const EMPTY_MARKS: MarkSet = {
 	primitives: [],
 	dataMatrix: null,
-	bounds: { x: 0, y: 0, width: 0, height: 0 }
+	bounds: { x: 0, y: 0, width: 0, height: 0 },
 };
 
 /** Export a print-ready PDF with bleed, crop boxes, registration marks and vector cut lines. */
@@ -31,7 +32,9 @@ export async function exportPdf(options: PdfExportOptions): Promise<Uint8Array> 
 	const includeCutLine = options.includeCutLine ?? doc.showCutLine;
 
 	const marks = includeMarks ? buildMarkSet(doc) : EMPTY_MARKS;
-	const media = computeMedia(doc, marks);
+	const contentBounds =
+		doc.trimShape === 'rect' ? undefined : (polygonsBounds(buildTrimPolygons(doc, getSource)) ?? undefined);
+	const media = computeMedia(doc, marks, contentBounds);
 	const mediaW = mmToPt(media.widthMm);
 	const mediaH = mmToPt(media.heightMm);
 
@@ -55,17 +58,18 @@ export async function exportPdf(options: PdfExportOptions): Promise<Uint8Array> 
 		trimX - mmToPt(bleed),
 		trimBottom - mmToPt(bleed),
 		trimW + mmToPt(bleed * 2),
-		trimH + mmToPt(bleed * 2)
+		trimH + mmToPt(bleed * 2),
 	);
 
 	// Flattened artwork (trim + bleed), positioned by its top-left corner.
 	if (includeArtwork) {
 		const artwork = renderArtwork(doc, getSource, getMask);
 		const image = await pdf.embedPng(await canvasToPngBytes(artwork));
-		const artW = mmToPt((artwork.width / doc.dpi) * 25.4);
-		const artH = mmToPt((artwork.height / doc.dpi) * 25.4);
-		const artX = mmToPt(media.trimX - bleed);
-		const artTop = media.trimY - bleed;
+		const rect = artworkRect(doc, getSource);
+		const artW = mmToPt(rect.width);
+		const artH = mmToPt(rect.height);
+		const artX = mmToPt(media.trimX + rect.x);
+		const artTop = media.trimY + rect.y;
 		const artY = mmToPt(media.heightMm - artTop) - artH;
 		page.drawImage(image, { x: artX, y: artY, width: artW, height: artH });
 	}
@@ -81,7 +85,7 @@ export async function exportPdf(options: PdfExportOptions): Promise<Uint8Array> 
 				start: { x: X(p.x1), y: Y(p.y1) },
 				end: { x: X(p.x2), y: Y(p.y2) },
 				thickness: mmToPt(p.width),
-				color: black
+				color: black,
 			});
 		} else if (p.type === 'rect') {
 			page.drawRectangle({
@@ -90,7 +94,7 @@ export async function exportPdf(options: PdfExportOptions): Promise<Uint8Array> 
 				width: mmToPt(p.width),
 				height: mmToPt(p.height),
 				borderWidth: mmToPt(p.strokeWidth),
-				borderColor: black
+				borderColor: black,
 			});
 		} else if (p.type === 'circle') {
 			page.drawCircle({
@@ -98,7 +102,7 @@ export async function exportPdf(options: PdfExportOptions): Promise<Uint8Array> 
 				y: Y(p.cy),
 				size: mmToPt(p.r),
 				borderWidth: mmToPt(p.strokeWidth),
-				borderColor: black
+				borderColor: black,
 			});
 		} else {
 			for (let i = 1; i < p.points.length; i++) {
@@ -106,7 +110,7 @@ export async function exportPdf(options: PdfExportOptions): Promise<Uint8Array> 
 					start: { x: X(p.points[i - 1].x), y: Y(p.points[i - 1].y) },
 					end: { x: X(p.points[i].x), y: Y(p.points[i].y) },
 					thickness: mmToPt(p.width),
-					color: black
+					color: black,
 				});
 			}
 		}
@@ -129,7 +133,7 @@ export async function exportPdf(options: PdfExportOptions): Promise<Uint8Array> 
 			const shifted = shiftPolygons(cut, media.trimX, media.trimY);
 			const path = polygonsToSvgPath(shifted, 3, (p) => ({
 				x: mmToPt(p.x),
-				y: mmToPt(p.y)
+				y: mmToPt(p.y),
 			}));
 			if (path) {
 				const c = hexToRgb(doc.cutLineColor, { r: 1, g: 0, b: 0.67 });
@@ -138,7 +142,7 @@ export async function exportPdf(options: PdfExportOptions): Promise<Uint8Array> 
 					y: mediaH,
 					borderColor: rgb(c.r, c.g, c.b),
 					borderWidth: mmToPt(0.25),
-					borderLineCap: LineCapStyle.Round
+					borderLineCap: LineCapStyle.Round,
 				});
 			}
 		}

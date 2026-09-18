@@ -1,13 +1,19 @@
-import { describe, expect, it } from 'vitest';
-import { offsetPolygons, polygonsToSvgPath } from './trace';
+import { describe, expect, it } from 'vite-plus/test';
+import {
+	booleanPolygons,
+	intersectPolygons,
+	offsetPolygons,
+	polygonsToSvgPath,
+	unionPolygons,
+} from './trace';
 
 const square = [
 	[
 		{ x: 0, y: 0 },
 		{ x: 10, y: 0 },
 		{ x: 10, y: 10 },
-		{ x: 0, y: 10 }
-	]
+		{ x: 0, y: 10 },
+	],
 ];
 
 function bounds(polys: { x: number; y: number }[][]) {
@@ -17,7 +23,7 @@ function bounds(polys: { x: number; y: number }[][]) {
 		minX: Math.min(...xs),
 		maxX: Math.max(...xs),
 		minY: Math.min(...ys),
-		maxY: Math.max(...ys)
+		maxY: Math.max(...ys),
 	};
 }
 
@@ -39,6 +45,48 @@ describe('offsetPolygons', () => {
 		const result = offsetPolygons(square, 0.5);
 		expect(result.length).toBeGreaterThanOrEqual(1);
 		expect(result[0].length).toBeGreaterThanOrEqual(3);
+	});
+});
+
+describe('booleanPolygons', () => {
+	const a = [
+		[
+			{ x: 0, y: 0 },
+			{ x: 10, y: 0 },
+			{ x: 10, y: 10 },
+			{ x: 0, y: 10 },
+		],
+	];
+	const b = [
+		[
+			{ x: 5, y: 5 },
+			{ x: 15, y: 5 },
+			{ x: 15, y: 15 },
+			{ x: 5, y: 15 },
+		],
+	];
+
+	it('unions overlapping squares into one ring', () => {
+		const result = unionPolygons(a, b);
+		expect(result).toHaveLength(1);
+		const bb = bounds(result);
+		expect(bb.minX).toBeCloseTo(0, 1);
+		expect(bb.maxX).toBeCloseTo(15, 1);
+	});
+
+	it('intersects overlapping squares', () => {
+		const result = intersectPolygons(a, b);
+		const bb = bounds(result);
+		expect(bb.minX).toBeCloseTo(5, 1);
+		expect(bb.maxX).toBeCloseTo(10, 1);
+	});
+
+	it('returns empty when an intersecting set is empty', () => {
+		expect(booleanPolygons(a, [], 'intersect')).toEqual([]);
+	});
+
+	it('keeps both inputs for a union with an empty set', () => {
+		expect(booleanPolygons(a, [], 'union')).toHaveLength(1);
 	});
 });
 

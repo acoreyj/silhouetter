@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vite-plus/test';
 import { smoothPolygons } from './smooth';
 import type { Point } from '$lib/types';
 
@@ -6,7 +6,7 @@ const square: Point[] = [
 	{ x: 0, y: 0 },
 	{ x: 10, y: 0 },
 	{ x: 10, y: 10 },
-	{ x: 0, y: 10 }
+	{ x: 0, y: 10 },
 ];
 
 describe('smoothPolygons', () => {
@@ -36,7 +36,7 @@ describe('smoothPolygons', () => {
 			{ x: 10, y: 0 },
 			{ x: 10, y: 10 },
 			{ x: 5, y: 50 },
-			{ x: 0, y: 10 }
+			{ x: 0, y: 10 },
 		];
 		const maxBefore = Math.max(...spike.map((p) => p.y));
 		const [smoothed] = smoothPolygons([spike], 1);
@@ -47,7 +47,7 @@ describe('smoothPolygons', () => {
 	it('leaves degenerate rings alone', () => {
 		const tiny: Point[] = [
 			{ x: 0, y: 0 },
-			{ x: 1, y: 1 }
+			{ x: 1, y: 1 },
 		];
 		expect(smoothPolygons([tiny], 1)[0]).toBe(tiny);
 	});

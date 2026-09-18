@@ -34,7 +34,43 @@ export interface ImageSource {
 	dpi: number;
 }
 
-export type LayerKind = 'image' | 'subject';
+export type LayerKind = 'image' | 'subject' | 'mask';
+
+/** Overall trim outline of the finished item. */
+export type TrimShapeKind = 'rect' | 'bookmark';
+
+/**
+ * A bookmark silhouette: a plain bookmark base for the bottom `baseFraction` of
+ * the trim, topped by a subject layer's smoothed + expanded cut outline.
+ */
+export interface BookmarkConfig {
+	/** Fraction of the trim height occupied by the plain base (bottom). 0..1. */
+	baseFraction: number;
+	/** Subject layer whose outline forms the top of the shape, if any. */
+	subjectLayerId: string | null;
+	/** Depth of the V-notch at the bottom centre, in mm (0 = no notch). */
+	notchDepthMm: number;
+	/** Radius of the bottom corners, in mm (0 = square). */
+	cornerRadiusMm: number;
+	/**
+	 * How far the head outline may extend beyond the page box (top/left/right),
+	 * in mm. The head band follows the subject outline and is only clipped by
+	 * this overflow; the plain base still crops to the page. 0 clips the head to
+	 * the page box.
+	 */
+	headOverflowMm: number;
+}
+
+export type MaskStrokeMode = 'erase' | 'restore';
+
+/** A brush stroke painted onto a subject layer's alpha mask. */
+export interface MaskStroke {
+	mode: MaskStrokeMode;
+	/** Brush radius in source pixels. */
+	radiusPx: number;
+	/** Stroke centreline in source pixel space. */
+	points: Point[];
+}
 
 interface LayerBase {
 	id: string;
@@ -82,9 +118,40 @@ export interface SubjectLayer extends LayerBase {
 	traceAutoThreshold: boolean;
 	/** Suppress traced specks smaller than this many source pixels. */
 	traceDespeckle: number;
+	/**
+	 * Brush strokes applied on top of the segmentation mask to locally erase or
+	 * restore alpha, in source pixel space. Kept as strokes (rather than a
+	 * second image) so undo snapshots stay small.
+	 */
+	maskStrokes: MaskStroke[];
 }
 
-export type Layer = ImageLayer | SubjectLayer;
+/**
+ * A document-level mask layer. Its opaque pixels are punched out of every other
+ * layer (subtract) while hidden areas stay visible, so a single editable mask
+ * can carve the whole composition and the cut outline.
+ */
+export interface MaskLayer extends LayerBase {
+	kind: 'mask';
+	/** Natural size of the mask bitmap, in pixels. */
+	pixelWidth: number;
+	pixelHeight: number;
+	/**
+	 * Base punched region as a data URL (opaque = hole), aligned to the mask
+	 * layer's pixel space. `null` when the mask starts empty.
+	 */
+	maskDataUrl: string | null;
+	/**
+	 * Brush strokes that build the punched region. `erase` subtracts (adds a
+	 * hole), `restore` adds (removes a hole), in mask pixel space.
+	 */
+	maskStrokes: MaskStroke[];
+}
+
+export type Layer = ImageLayer | SubjectLayer | MaskLayer;
+
+/** Layers that own an editable mask (subject = keep mask, mask = hole mask). */
+export type MaskableLayer = SubjectLayer | MaskLayer;
 
 export interface BleedConfig {
 	enabled: boolean;
@@ -113,8 +180,12 @@ export interface RegistrationConfig {
 
 export interface DocumentModel {
 	name: string;
-	/** Trim size, in mm. */
+	/** Trim (bounding-box) size, in mm. */
 	page: Size;
+	/** Overall trim outline; 'rect' crops to the page box. */
+	trimShape: TrimShapeKind;
+	/** Bookmark silhouette parameters, used when `trimShape` is 'bookmark'. */
+	bookmark: BookmarkConfig;
 	/** Target output resolution. */
 	dpi: number;
 	bleed: BleedConfig;

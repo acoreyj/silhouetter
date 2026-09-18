@@ -1,7 +1,13 @@
 import { traceImageData, type TurnPolicy } from '@cadit-app/potrace-ts';
-import Shape from '@doodle3d/clipper-js';
-import { get2d, type Canvas2D } from '$lib/image/ops';
+import ShapeImport from '@doodle3d/clipper-js';
+import { get2d, type Canvas2D } from '$lib/image/canvas';
 import type { Point } from '$lib/types';
+
+// `@doodle3d/clipper-js` advertises CommonJS as its ESM entry, so strict ESM
+// interop (Vite in the browser) hands back the module namespace object, while
+// Node/Vitest expose the Shape class as the default. Accept either shape.
+const Shape = ((ShapeImport as unknown as { default?: typeof ShapeImport }).default ??
+	ShapeImport) as typeof ShapeImport;
 
 export interface TraceOptions {
 	/** Suppress speckles smaller than this many pixels. */
@@ -49,9 +55,9 @@ export function traceMask(mask: Canvas2D, options: TraceOptions = {}): Point[][]
 			alphamax: options.alphamax ?? 1.334,
 			optcurve: options.optcurve ?? true,
 			turnpolicy: options.turnpolicy ?? 'minority',
-			opttolerance: 0.2
+			opttolerance: 0.2,
 		},
-		options.threshold ?? 128
+		options.threshold ?? 128,
 	);
 	return paths
 		.map((path) => dedupe(path.points.map((p) => ({ x: p.x, y: p.y }))))
@@ -71,7 +77,7 @@ export interface OffsetOptions {
 export function offsetPolygons(
 	polygons: Point[][],
 	delta: number,
-	options: OffsetOptions = {}
+	options: OffsetOptions = {},
 ): Point[][] {
 	if (polygons.length === 0 || delta === 0) return polygons;
 
@@ -82,13 +88,13 @@ export function offsetPolygons(
 		true,
 		true,
 		false,
-		true
+		true,
 	);
 	shape.scaleUp(scale);
 	const offset = shape.offset(delta * scale, {
 		jointType: options.jointType ?? 'jtRound',
 		endType: 'etClosedPolygon',
-		roundPrecision: (options.precision ?? 0.05) * scale
+		roundPrecision: (options.precision ?? 0.05) * scale,
 	});
 	offset.scaleDown(scale);
 
@@ -98,11 +104,57 @@ export function offsetPolygons(
 		.filter((poly) => poly.length >= 3);
 }
 
+export type BooleanOp = 'union' | 'intersect' | 'difference';
+
+/**
+ * Apply a boolean operation between two polygon sets. Coordinates are scaled to
+ * integers for Clipper and the result is de-duplicated, matching the behaviour
+ * of {@link offsetPolygons}.
+ */
+export function booleanPolygons(a: Point[][], b: Point[][], op: BooleanOp): Point[][] {
+	if (a.length === 0 || b.length === 0) {
+		if (op === 'intersect') return [];
+		return (op === 'union' ? [...a, ...b] : a).map(clean);
+	}
+
+	const scale = 100;
+	const shapeA = new Shape(
+		a.map((poly) => poly.map((p) => ({ x: p.x, y: p.y }))),
+		true,
+		true,
+	);
+	const shapeB = new Shape(
+		b.map((poly) => poly.map((p) => ({ x: p.x, y: p.y }))),
+		true,
+		true,
+	);
+	shapeA.scaleUp(scale);
+	shapeB.scaleUp(scale);
+	const result = shapeA[op](shapeB);
+	result.scaleDown(scale);
+	return result
+		.mapToLower()
+		.map((poly) => dedupe(poly.map((p) => ({ x: p.x, y: p.y }))))
+		.filter((poly) => poly.length >= 3);
+}
+
+export function unionPolygons(a: Point[][], b: Point[][]): Point[][] {
+	return booleanPolygons(a, b, 'union');
+}
+
+export function intersectPolygons(a: Point[][], b: Point[][]): Point[][] {
+	return booleanPolygons(a, b, 'intersect');
+}
+
+function clean(poly: Point[]): Point[] {
+	return dedupe(poly.map((p) => ({ x: p.x, y: p.y })));
+}
+
 /** Serialise closed polygons as an SVG path (M/L/Z), optionally transformed. */
 export function polygonsToSvgPath(
 	polygons: Point[][],
 	decimals = 3,
-	transform?: (p: Point) => Point
+	transform?: (p: Point) => Point,
 ): string {
 	const fmt = (n: number) => {
 		const v = Number(n.toFixed(decimals));

@@ -1,80 +1,28 @@
-import type { DocumentModel, ImageSource, Layer, Point, SubjectLayer } from '$lib/types';
+import type { DocumentModel, Layer, Point, Rect } from '$lib/types';
 import { mmToPx } from '$lib/units';
+import { buildTrimPolygons, polygonsBounds } from '$lib/geometry/shape';
+import { offsetPolygons } from '$lib/vector/trace';
+import {
+	blobToImage,
+	canvasToDataUrl,
+	canvasToPngBytes,
+	createCanvas,
+	get2d,
+	loadImageElement,
+	probeImage,
+	type Canvas2D,
+} from './canvas';
 
-export type Canvas2D = HTMLCanvasElement | OffscreenCanvas;
-
-/** Create a 2D canvas, preferring OffscreenCanvas when available. */
-export function createCanvas(width: number, height: number): Canvas2D {
-	if (typeof OffscreenCanvas !== 'undefined') {
-		return new OffscreenCanvas(Math.max(1, Math.round(width)), Math.max(1, Math.round(height)));
-	}
-	const canvas = document.createElement('canvas');
-	canvas.width = Math.max(1, Math.round(width));
-	canvas.height = Math.max(1, Math.round(height));
-	return canvas;
-}
-
-export function get2d(canvas: Canvas2D, willReadFrequently = false): CanvasRenderingContext2D {
-	const ctx = canvas.getContext('2d', { willReadFrequently }) as CanvasRenderingContext2D | null;
-	if (!ctx) throw new Error('Unable to acquire a 2D context');
-	return ctx;
-}
-
-/** Load an image element from an object/data URL. */
-export function loadImageElement(src: string): Promise<HTMLImageElement> {
-	return new Promise((resolve, reject) => {
-		const img = new Image();
-		img.crossOrigin = 'anonymous';
-		img.onload = () => resolve(img);
-		img.onerror = () => reject(new Error(`Failed to load image: ${src.slice(0, 64)}`));
-		img.src = src;
-	});
-}
-
-/** Decode a Blob into an HTMLImageElement via an object URL. */
-export async function blobToImage(blob: Blob): Promise<HTMLImageElement> {
-	const url = URL.createObjectURL(blob);
-	try {
-		return await loadImageElement(url);
-	} finally {
-		URL.revokeObjectURL(url);
-	}
-}
-
-/** Read a File/Blob and report its natural pixel size. */
-export async function probeImage(
-	blob: Blob
-): Promise<{ image: HTMLImageElement; width: number; height: number; src: string }> {
-	const src = URL.createObjectURL(blob);
-	const image = await loadImageElement(src);
-	return { image, width: image.naturalWidth, height: image.naturalHeight, src };
-}
-
-export async function canvasToPngBytes(canvas: Canvas2D): Promise<Uint8Array> {
-	if ('convertToBlob' in canvas) {
-		const blob = await canvas.convertToBlob({ type: 'image/png' });
-		return new Uint8Array(await blob.arrayBuffer());
-	}
-	const blob = await new Promise<Blob>((resolve, reject) =>
-		(canvas as HTMLCanvasElement).toBlob(
-			(b) => (b ? resolve(b) : reject(new Error('toBlob failed'))),
-			'image/png'
-		)
-	);
-	return new Uint8Array(await blob.arrayBuffer());
-}
-
-export function canvasToDataUrl(canvas: Canvas2D): string {
-	if ('convertToBlob' in canvas) {
-		// OffscreenCanvas path: synchronously unavailable, fall back to a DOM canvas.
-		const dom = document.createElement('canvas');
-		dom.width = canvas.width;
-		dom.height = canvas.height;
-		get2d(dom).drawImage(canvas as unknown as CanvasImageSource, 0, 0);
-		return dom.toDataURL('image/png');
-	}
-	return (canvas as HTMLCanvasElement).toDataURL('image/png');
-}
+export {
+	blobToImage,
+	canvasToDataUrl,
+	canvasToPngBytes,
+	createCanvas,
+	get2d,
+	loadImageElement,
+	probeImage,
+};
+export type { Canvas2D };
 
 /**
  * Build an aligned alpha mask for a source image. Pixels at or above the alpha
@@ -82,7 +30,7 @@ export function canvasToDataUrl(canvas: Canvas2D): string {
  */
 export function buildAlphaMask(
 	source: HTMLImageElement,
-	threshold = 8
+	threshold = 8,
 ): { canvas: Canvas2D; dataUrl: string } {
 	const canvas = createCanvas(source.naturalWidth, source.naturalHeight);
 	const ctx = get2d(canvas, true);
@@ -114,7 +62,7 @@ const maskedCache = new Map<string, Canvas2D>();
 export function composeMasked(
 	key: string,
 	source: HTMLImageElement,
-	mask: HTMLImageElement
+	mask: HTMLImageElement,
 ): Canvas2D {
 	const cached = maskedCache.get(key);
 	if (cached) return cached;
@@ -129,11 +77,12 @@ export function composeMasked(
 	return canvas;
 }
 
-/** Render a single layer (with optional mask) into its own tightly-fit canvas. */function rasterizeLayer(
+/** Render a single layer (with optional mask) into its own tightly-fit canvas. */
+function rasterizeLayer(
 	layer: Layer,
 	source: HTMLImageElement,
 	mask: HTMLImageElement | undefined,
-	pxPerMm: number
+	pxPerMm: number,
 ): Canvas2D {
 	const w = Math.max(1, Math.round(layer.width * pxPerMm));
 	const h = Math.max(1, Math.round(layer.height * pxPerMm));
@@ -148,15 +97,39 @@ export function composeMasked(
 	return canvas;
 }
 
-/** Render all visible layers into a canvas covering exactly the trim box. */
+/** Punch a mask layer's holes out of a canvas already in page-pixel space. */
+function punchMaskLayer(
+	ctx: CanvasRenderingContext2D,
+	layer: Layer,
+	mask: HTMLImageElement,
+	pxPerMm: number,
+	offX = 0,
+	offY = 0,
+): void {
+	const w = Math.max(1, layer.width * pxPerMm);
+	const h = Math.max(1, layer.height * pxPerMm);
+	const cx = (layer.x + layer.width / 2) * pxPerMm + offX;
+	const cy = (layer.y + layer.height / 2) * pxPerMm + offY;
+	ctx.save();
+	ctx.globalCompositeOperation = 'destination-out';
+	ctx.translate(cx, cy);
+	ctx.rotate((layer.rotation * Math.PI) / 180);
+	ctx.drawImage(mask as unknown as CanvasImageSource, -w / 2, -h / 2, w, h);
+	ctx.restore();
+}
+
+/** Render all visible layers into a canvas covering `region` (page mm). */
 export function renderTrim(
 	doc: DocumentModel,
 	getSource: (id: string) => HTMLImageElement | undefined,
-	getMask: (layer: SubjectLayer) => HTMLImageElement | undefined,
-	pxPerMm: number
+	getMask: (layer: Layer) => HTMLImageElement | undefined,
+	pxPerMm: number,
+	region: Rect = { x: 0, y: 0, width: doc.page.width, height: doc.page.height },
 ): Canvas2D {
-	const w = Math.round(doc.page.width * pxPerMm);
-	const h = Math.round(doc.page.height * pxPerMm);
+	const w = Math.max(1, Math.round(region.width * pxPerMm));
+	const h = Math.max(1, Math.round(region.height * pxPerMm));
+	const offX = -region.x * pxPerMm;
+	const offY = -region.y * pxPerMm;
 	const canvas = createCanvas(w, h);
 	const ctx = get2d(canvas);
 
@@ -166,13 +139,13 @@ export function renderTrim(
 	}
 
 	for (const layer of doc.layers) {
-		if (!layer.visible || layer.opacity <= 0) continue;
+		if (!layer.visible || layer.opacity <= 0 || layer.kind === 'mask') continue;
 		const source = getSource(layer.sourceId);
 		if (!source) continue;
 		const mask = layer.kind === 'subject' ? getMask(layer) : undefined;
 		const raster = rasterizeLayer(layer, source, mask, pxPerMm);
-		const cx = (layer.x + layer.width / 2) * pxPerMm;
-		const cy = (layer.y + layer.height / 2) * pxPerMm;
+		const cx = (layer.x + layer.width / 2) * pxPerMm + offX;
+		const cy = (layer.y + layer.height / 2) * pxPerMm + offY;
 		ctx.save();
 		ctx.globalAlpha = layer.opacity;
 		ctx.translate(cx, cy);
@@ -181,7 +154,45 @@ export function renderTrim(
 		ctx.restore();
 	}
 
+	// Document mask layers punch through everything above.
+	for (const layer of doc.layers) {
+		if (layer.kind !== 'mask' || !layer.visible || layer.opacity <= 0) continue;
+		const mask = getMask(layer);
+		if (mask) punchMaskLayer(ctx, layer, mask, pxPerMm, offX, offY);
+	}
+
 	return canvas;
+}
+
+/**
+ * Keep only the pixels of `canvas` that fall inside the given page-millimetre
+ * polygons. `origin` is the page-mm coordinate of the canvas top-left corner.
+ */
+export function clipCanvasToPolygons(
+	canvas: Canvas2D,
+	polygonsPageMm: Point[][],
+	pxPerMm: number,
+	origin: Point = { x: 0, y: 0 },
+): void {
+	if (polygonsPageMm.length === 0) return;
+	const mask = createCanvas(canvas.width, canvas.height);
+	const mctx = get2d(mask);
+	mctx.fillStyle = '#000';
+	mctx.beginPath();
+	for (const poly of polygonsPageMm) {
+		if (poly.length < 3) continue;
+		mctx.moveTo((poly[0].x - origin.x) * pxPerMm, (poly[0].y - origin.y) * pxPerMm);
+		for (let i = 1; i < poly.length; i++) {
+			mctx.lineTo((poly[i].x - origin.x) * pxPerMm, (poly[i].y - origin.y) * pxPerMm);
+		}
+		mctx.closePath();
+	}
+	mctx.fill('nonzero');
+
+	const ctx = get2d(canvas);
+	ctx.globalCompositeOperation = 'destination-in';
+	ctx.drawImage(mask as unknown as CanvasImageSource, 0, 0);
+	ctx.globalCompositeOperation = 'source-over';
 }
 
 /**
@@ -193,7 +204,7 @@ export function addBleed(
 	trim: Canvas2D,
 	bleedPx: number,
 	mode: 'mirror' | 'solid',
-	solidColor: string
+	solidColor: string,
 ): Canvas2D {
 	const b = Math.max(0, Math.round(bleedPx));
 	const w = trim.width;
@@ -253,7 +264,7 @@ export function addBleed(
 			dx,
 			dy,
 			b,
-			b
+			b,
 		);
 	};
 	drawCorner(0, 0, 0, 0);
@@ -264,48 +275,60 @@ export function addBleed(
 	return out;
 }
 
-/** Full artwork render (trim + optional bleed) at the document DPI. */
-export function renderArtwork(
+/**
+ * Page-millimetre rectangle the flattened artwork covers: the document trim
+ * outline (which may overflow the page for a bookmark) plus the bleed margin.
+ */
+export function artworkRect(
 	doc: DocumentModel,
 	getSource: (id: string) => HTMLImageElement | undefined,
-	getMask: (layer: SubjectLayer) => HTMLImageElement | undefined
-): Canvas2D {
-	const pxPerMm = doc.dpi / 25.4;
-	const trim = renderTrim(doc, getSource, getMask, pxPerMm);
-	const bleedPx = doc.bleed.enabled ? mmToPx(doc.bleed.amountMm, doc.dpi) : 0;
-	return addBleed(trim, bleedPx, doc.bleed.mode, doc.bleed.solidColor);
-}
-
-/** Scale polygons (in source pixel space) to millimetres within a layer box. */
-export function polygonsToMm(
-	polygons: Point[][],
-	sourceWidth: number,
-	sourceHeight: number,
-	layer: Layer
-): Point[][] {
-	const sx = layer.width / sourceWidth;
-	const sy = layer.height / sourceHeight;
-	return polygons.map((poly) => poly.map((p) => ({ x: p.x * sx, y: p.y * sy })));
+): Rect {
+	const bleed = doc.bleed.enabled ? doc.bleed.amountMm : 0;
+	let content: Rect = { x: 0, y: 0, width: doc.page.width, height: doc.page.height };
+	if (doc.trimShape !== 'rect') {
+		const bounds = polygonsBounds(buildTrimPolygons(doc, getSource));
+		if (bounds) content = bounds;
+	}
+	return {
+		x: content.x - bleed,
+		y: content.y - bleed,
+		width: content.width + bleed * 2,
+		height: content.height + bleed * 2,
+	};
 }
 
 /**
- * Convert cut polygons expressed in layer-local millimetres into absolute page
- * millimetres, applying the layer's rotation around its centre.
+ * Full artwork render (trim + optional bleed) at the document DPI. For a
+ * non-rectangular trim, the result is clipped to the trim outline (expanded by
+ * the bleed amount) so the printed artwork follows the bookmark silhouette.
+ * The canvas covers {@link artworkRect}, so a bookmark head that overflows the
+ * page is rendered too.
  */
-export function transformPolygonsToPage(polygons: Point[][], layer: Layer): Point[][] {
-	const cx = layer.x + layer.width / 2;
-	const cy = layer.y + layer.height / 2;
-	const rad = (layer.rotation * Math.PI) / 180;
-	const cos = Math.cos(rad);
-	const sin = Math.sin(rad);
-	return polygons.map((poly) =>
-		poly.map((p) => {
-			const dx = p.x - layer.width / 2;
-			const dy = p.y - layer.height / 2;
-			return {
-				x: cx + dx * cos - dy * sin,
-				y: cy + dx * sin + dy * cos
-			};
-		})
-	);
+export function renderArtwork(
+	doc: DocumentModel,
+	getSource: (id: string) => HTMLImageElement | undefined,
+	getMask: (layer: Layer) => HTMLImageElement | undefined,
+): Canvas2D {
+	const pxPerMm = doc.dpi / 25.4;
+	const bleed = doc.bleed.enabled ? doc.bleed.amountMm : 0;
+	const rect = artworkRect(doc, getSource);
+	const trimRegion: Rect = {
+		x: rect.x + bleed,
+		y: rect.y + bleed,
+		width: Math.max(0.01, rect.width - bleed * 2),
+		height: Math.max(0.01, rect.height - bleed * 2),
+	};
+	const trim = renderTrim(doc, getSource, getMask, pxPerMm, trimRegion);
+	const bleedPx = doc.bleed.enabled ? mmToPx(doc.bleed.amountMm, doc.dpi) : 0;
+	const art = addBleed(trim, bleedPx, doc.bleed.mode, doc.bleed.solidColor);
+
+	if (doc.trimShape === 'rect') return art;
+
+	const shape = buildTrimPolygons(doc, getSource);
+	const expanded =
+		bleed > 0
+			? offsetPolygons(shape, bleed, { jointType: 'jtRound', precision: 0.05 })
+			: shape;
+	clipCanvasToPolygons(art, expanded, pxPerMm, { x: rect.x, y: rect.y });
+	return art;
 }

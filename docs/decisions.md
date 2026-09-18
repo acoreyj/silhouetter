@@ -77,6 +77,7 @@ fp16). It runs locally and its foreground alpha doubles as the subject mask, so 
 only run the model once.
 
 **Consequences.**
+
 - **License risk:** the package is **AGPL-3.0**. Acceptable for personal/local use;
   public hosting/distribution triggers copyleft obligations. The documented escape
   hatch is `@huggingface/transformers` + a permissive ONNX model.
@@ -114,7 +115,7 @@ polygons. Clipper works in integers, so `offsetPolygons` scales up/down by 100 f
 sub-unit precision and relies on Clipper's automatic orientation fixing.
 
 **Consequences.** Resolution-independent, fast, and no second geometry dependency.
-Smoothing slightly shrinks the shape, which is why it runs *before* expansion and why
+Smoothing slightly shrinks the shape, which is why it runs _before_ expansion and why
 Expand should be set above the desired final clearance.
 
 ---
@@ -178,3 +179,57 @@ commit `pnpm-lock.yaml`. pnpm 12 reads non-auth settings from `pnpm-workspace.ya
 
 **Consequences.** Reproducible installs. Contributors need vite-plus for the Node
 version and pnpm for dependencies. `npm`-authaled settings no longer apply.
+
+---
+
+## 0012 — Bookmark-shaped trim: a derived document outline
+
+**Context.** A bookmark often needs a non-rectangular silhouette: a plain bookmark
+base (notched bottom, rounded corners) topped by a character's cut outline so the
+head pokes out above the page box. The document model only had a rectangular
+`page`, and cut outlines were preview/export-only geometry that never clipped the
+artwork.
+
+**Decision.**
+
+- Add `doc.trimShape: 'rect' | 'bookmark'` and `doc.bookmark` (base fraction,
+  head layer, notch depth, corner radius). `'rect'` preserves the old behaviour.
+- Derive a single trim outline in page millimetres (`geometry/shape.ts`,
+  `buildTrimPolygons`): the bookmark base polygon unioned with the head layer's
+  `buildSubjectOutline` clipped to the top band
+  (`seamY = pageH · (1 − baseFraction)`). Because `buildSubjectOutline` already
+  runs smooth → expand, the top of the shape reuses the exact Expand/Smoothing
+  values that drive the cut line.
+- Clip the flattened artwork to this outline (expanded by the bleed amount) at the
+  end of `renderArtwork`, so the printed raster follows the silhouette.
+- In bookmark mode a cutter follows the whole silhouette, so
+  `collectCutPolygons` returns the document shape rather than per-subject loops.
+- Keep geometry primitives in dependency-free leaf modules (`image/canvas.ts`,
+  `geometry/transform.ts`) so the vector/geometry code does not import the raster
+  pipeline that consumes it.
+
+**Consequences.** The preview, PDF and SVG all derive from one outline. PDF's
+`TrimBox` remains the rectangular bounding box (PDF cannot express the shape); the
+vector cut path carries the true silhouette, and SVG is exact. Bleed is produced
+by mirror-extruding the page canvas and clipping to the shape offset outwards, so
+notch/corner bleed follows the outline rather than mirroring around curves.
+
+---
+
+## 0013 — Mask brush edits stored as strokes
+
+**Context.** Background removal keeps the whole subject; a bookmark may need only
+the head. The segmentation mask must be editable without re-running the model, and
+undo snapshots must stay cheap.
+
+**Decision.** Store brush edits on the subject layer as an ordered list of
+`MaskStroke`s (`erase`/`restore`, radius and a polyline in source pixel space)
+rather than a second mask image. `state.svelte.ts` derives the effective mask from
+the cached raw segmentation mask plus the strokes, and caches the result keyed by a
+revision counter; the preview and exporters read the derived mask through
+`getMask`. Re-running background removal clears the strokes.
+
+**Consequences.** Undo/redo carries only stroke metadata. Tracing still runs from
+the mask on demand, so after painting the user must **Re-trace outline** to update
+the cut and the bookmark shape — consistent with the existing trace/segment split
+(0008).

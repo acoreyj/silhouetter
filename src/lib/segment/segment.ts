@@ -33,7 +33,7 @@ export const MAX_SEGMENT_PIXELS = 8192;
  */
 export async function segmentForeground(
 	input: Blob | string,
-	onProgress?: SegmentProgress
+	onProgress?: SegmentProgress,
 ): Promise<SegmentResult> {
 	const { removeBackground } = await loadModule();
 
@@ -41,14 +41,17 @@ export async function segmentForeground(
 		device: 'gpu',
 		model: 'isnet_fp16',
 		output: { format: 'image/png' },
-		progress: onProgress
+		progress: onProgress,
 	});
 
 	const foreground = await blobToImage(blob);
-	if (foreground.naturalWidth > MAX_SEGMENT_PIXELS || foreground.naturalHeight > MAX_SEGMENT_PIXELS) {
+	if (
+		foreground.naturalWidth > MAX_SEGMENT_PIXELS ||
+		foreground.naturalHeight > MAX_SEGMENT_PIXELS
+	) {
 		throw new Error(
 			`Image is too large (${foreground.naturalWidth}×${foreground.naturalHeight}). ` +
-				`Maximum supported is ${MAX_SEGMENT_PIXELS}×${MAX_SEGMENT_PIXELS}.`
+				`Maximum supported is ${MAX_SEGMENT_PIXELS}×${MAX_SEGMENT_PIXELS}.`,
 		);
 	}
 
@@ -58,6 +61,6 @@ export async function segmentForeground(
 		maskDataUrl: dataUrl,
 		maskCanvas: canvas,
 		width: foreground.naturalWidth,
-		height: foreground.naturalHeight
+		height: foreground.naturalHeight,
 	};
 }

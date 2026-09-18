@@ -2,3 +2,17 @@
 # in-browser background removal). Approve it under pnpm's build sandbox.
 allowBuilds:
   protobufjs: true
+catalog:
+  vite: npm:@voidzero-dev/vite-plus-core@0.3.2
+  vitest: 4.1.11
+  vite-plus: 0.3.2
+overrides:
+  vite@*: 'catalog:'
+  vitest@*: 'catalog:'
+peerDependencyRules:
+  allowAny:
+    - vite
+    - vitest
+  allowedVersions:
+    vite: '*'
+    vitest: '*'

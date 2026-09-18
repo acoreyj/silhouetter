@@ -1,10 +1,21 @@
 <script lang="ts">
-	import { store, DEFAULT_PAGE_SIZES, DPI_PRESETS } from '$lib/state.svelte';
+	import { store, DEFAULT_PAGE_SIZES, DPI_PRESETS, brush, getSource } from '$lib/state.svelte';
 	import { MARK_STYLES } from '$lib/marks';
-	import { retraceLayer } from '$lib/actions';
-	import type { Layer } from '$lib/types';
+	import { retraceLayer, clearMaskStrokes } from '$lib/actions';
+	import { bookmarkHasHeadCoverage } from '$lib/geometry/shape';
+	import type { BookmarkConfig, Layer, SubjectLayer } from '$lib/types';
 
 	const layer = $derived(store.selected);
+
+	const subjectLayers = $derived(
+		store.doc.layers.filter((l): l is SubjectLayer => l.kind === 'subject'),
+	);
+	const headWarning = $derived(
+		store.doc.trimShape === 'bookmark' && !bookmarkHasHeadCoverage(store.doc, getSource),
+	);
+	const maskStrokeCount = $derived(
+		layer && (layer.kind === 'subject' || layer.kind === 'mask') ? layer.maskStrokes.length : 0,
+	);
 
 	let tracing = $state(false);
 	let traceError = $state('');
@@ -20,6 +31,38 @@
 		} finally {
 			tracing = false;
 		}
+	}
+
+	async function onClearStrokes() {
+		if (!layer) return;
+		await clearMaskStrokes(layer.id);
+	}
+
+	function onCoverPage() {
+		if (!layer || layer.kind !== 'image') return;
+		const src = getSource(layer.sourceId);
+		const ratio = src ? src.naturalWidth / src.naturalHeight : layer.width / layer.height;
+		let w = store.doc.page.width;
+		let h = w / ratio;
+		if (h < store.doc.page.height) {
+			h = store.doc.page.height;
+			w = h * ratio;
+		}
+		updateLayer({
+			x: (store.doc.page.width - w) / 2,
+			y: (store.doc.page.height - h) / 2,
+			width: w,
+			height: h,
+			rotation: 0,
+		});
+	}
+
+	function updateBookmark(patch: Partial<BookmarkConfig>) {
+		store.commit((d) => Object.assign(d.bookmark, patch));
+	}
+
+	function updateBookmarkLive(patch: Partial<BookmarkConfig>) {
+		Object.assign(store.doc.bookmark, patch);
 	}
 
 	function setDoc(mutator: (doc: typeof store.doc) => void) {
@@ -106,6 +149,78 @@
 				{/each}
 			</select>
 		</label>
+	</section>
+
+	<section>
+		<h2>Trim shape</h2>
+		<label>
+			Shape
+			<select
+				value={store.doc.trimShape}
+				onchange={(e) => setDoc((d) => (d.trimShape = e.currentTarget.value as typeof d.trimShape))}
+			>
+				<option value="rect">Rectangle</option>
+				<option value="bookmark">Bookmark silhouette</option>
+			</select>
+		</label>
+		{#if store.doc.trimShape === 'bookmark'}
+			<label>
+				Base / head split
+				<input
+					type="range"
+					min="0.05"
+					max="0.95"
+					step="0.01"
+					value={store.doc.bookmark.baseFraction}
+					onpointerdown={begin}
+					oninput={(e) => updateBookmarkLive({ baseFraction: Number(e.currentTarget.value) })}
+				/>
+				<span class="value">
+					{Math.round((1 - store.doc.bookmark.baseFraction) * 100)}% head ·
+					{Math.round(store.doc.bookmark.baseFraction * 100)}% base
+				</span>
+			</label>
+			<label>
+				Head layer
+				<select
+					value={store.doc.bookmark.subjectLayerId ?? ''}
+					onchange={(e) => updateBookmark({ subjectLayerId: e.currentTarget.value || null })}
+				>
+					<option value="">Auto (first traced)</option>
+					{#each subjectLayers as s (s.id)}
+						<option value={s.id}>{s.name}</option>
+					{/each}
+				</select>
+			</label>
+			<div class="row">
+				<label>
+					Notch depth (mm)
+					<input
+						type="number"
+						min="0"
+						step="0.5"
+						value={store.doc.bookmark.notchDepthMm}
+						onchange={(e) => updateBookmark({ notchDepthMm: Number(e.currentTarget.value) })}
+					/>
+				</label>
+				<label>
+					Corner radius (mm)
+					<input
+						type="number"
+						min="0"
+						step="0.5"
+						value={store.doc.bookmark.cornerRadiusMm}
+						onchange={(e) => updateBookmark({ cornerRadiusMm: Number(e.currentTarget.value) })}
+					/>
+				</label>
+			</div>
+			{#if headWarning}
+				<p class="hint error">
+					The head layer has no traced outline yet. Run Remove background and Re-trace outline.
+				</p>
+			{/if}
+			<p class="hint">The top follows the head's expanded + smoothed cut line.</p>
+		{/if}
 	</section>
 
 	<section>
@@ -312,6 +427,10 @@
 				/>
 			</label>
 
+			{#if layer.kind === 'image'}
+				<button onclick={onCoverPage}>Fill page (cover)</button>
+			{/if}
+
 			{#if layer.kind === 'subject'}
 				<label>
 					Expand (mm)
@@ -385,6 +504,80 @@
 				{:else}
 					<p class="hint">Re-traces from the stored mask without re-running the model.</p>
 				{/if}
+
+				<h3>Mask brush</h3>
+				<button class:active={brush.active} onclick={() => (brush.active = !brush.active)}>
+					{brush.active ? 'Stop painting' : 'Paint mask'}
+				</button>
+				<div class="row">
+					<label>
+						Mode
+						<select
+							value={brush.mode}
+							onchange={(e) => (brush.mode = e.currentTarget.value as 'erase' | 'restore')}
+						>
+							<option value="erase">Erase</option>
+							<option value="restore">Restore</option>
+						</select>
+					</label>
+					<label>
+						Size (mm)
+						<input
+							type="range"
+							min="0.5"
+							max="20"
+							step="0.5"
+							value={brush.radiusMm}
+							oninput={(e) => (brush.radiusMm = Number(e.currentTarget.value))}
+						/>
+					</label>
+				</div>
+				<button onclick={onClearStrokes} disabled={maskStrokeCount === 0}>
+					Clear brush edits ({maskStrokeCount})
+				</button>
+				<p class="hint">
+					Paint the mask, then Re-trace outline to update the cut and bookmark shape.
+				</p>
+			{:else if layer.kind === 'mask'}
+				<h3>Mask</h3>
+				<p class="hint">
+					Painted areas are punched out of every layer. Use the eye in the Layers panel to
+					enable or disable the mask.
+				</p>
+				<h3>Mask brush</h3>
+				<button class:active={brush.active} onclick={() => (brush.active = !brush.active)}>
+					{brush.active ? 'Stop painting' : 'Paint mask'}
+				</button>
+				<div class="row">
+					<label>
+						Brush
+						<select
+							value={brush.mode}
+							onchange={(e) => (brush.mode = e.currentTarget.value as 'erase' | 'restore')}
+						>
+							<option value="erase">Subtract</option>
+							<option value="restore">Add</option>
+						</select>
+					</label>
+					<label>
+						Size (mm)
+						<input
+							type="range"
+							min="0.5"
+							max="20"
+							step="0.5"
+							value={brush.radiusMm}
+							oninput={(e) => (brush.radiusMm = Number(e.currentTarget.value))}
+						/>
+					</label>
+				</div>
+				<button onclick={onClearStrokes} disabled={maskStrokeCount === 0}>
+					Clear brush edits ({maskStrokeCount})
+				</button>
+				<p class="hint">
+					Subtract punches a hole through all layers; Add fills it back in. The cut line follows
+					automatically.
+				</p>
 			{/if}
 		</section>
 	{/if}
@@ -452,5 +645,9 @@
 	.value {
 		font-size: 0.72rem;
 		color: var(--muted);
+	}
+	button.active {
+		background: color-mix(in srgb, var(--accent) 18%, transparent);
+		border-color: var(--accent);
 	}
 </style>
