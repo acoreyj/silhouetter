@@ -68,6 +68,28 @@ dependency of `onnxruntime-web`); this is declared under `allowBuilds` in
    registration-mark style.
 8. **Export** — **PDF** (print), **SVG** (cutter software), or **PNG** (flattened
    raster).
+9. **Save** — store the project in this browser under a name, or download it as a
+   `.silhouetter.json` file (`Project` menu or `Ctrl`/`Cmd`+`S`).
+
+## Projects (save & open)
+
+The **Project** menu in the toolbar saves and restores work without re-importing
+images:
+
+- **Save to browser** — stores the document plus every referenced bitmap by name in
+  **IndexedDB**. Object URLs are converted to data URLs so projects survive a
+  reload. Named projects are listed in the menu and can be loaded or deleted.
+- **Download .json** — the same project as a `.silhouetter.json` file, to keep or
+  move between machines.
+- **Open .json…** — load a downloaded project, replacing the current document
+  (undoable).
+
+`Ctrl`/`Cmd`+`S` saves to the browser under the current project name. IndexedDB is
+used rather than `localStorage` because a single imported bitmap becomes a
+multi-megabyte base64 data URL, which overflows the ~5 MB `localStorage` quota after
+one or two images. IndexedDB stores the structured data directly and has a much
+larger quota; the **Download** file remains the way to move projects between
+browsers or machines.
 
 ## Print model
 
@@ -105,7 +127,9 @@ src/lib/
   export/pdf.ts       pdf-lib PDF exporter
   export/svg.ts       cutter SVG exporter
   export/cut.ts       shared cut-outline builder
-  components/         Editor, LayerNode, Toolbar, LayerPanel, Inspector
+  project.ts          project file format (serialise / validate)
+  projectStorage.svelte.ts  named projects in localStorage
+  components/         Editor, LayerNode, Toolbar, LayerPanel, Inspector, ProjectMenu
 src/routes/           SvelteKit page
 ```
 

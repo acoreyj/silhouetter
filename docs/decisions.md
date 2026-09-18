@@ -233,3 +233,57 @@ revision counter; the preview and exporters read the derived mask through
 the mask on demand, so after painting the user must **Re-trace outline** to update
 the cut and the bookmark shape — consistent with the existing trace/segment split
 (0008).
+
+---
+
+## 0014 — Project persistence: named localStorage saves plus a downloadable file
+
+**Context.** Work needs to survive a reload without re-importing images and
+re-running segmentation. Browsers give us object URLs for imported files (not
+persistable) and `localStorage` (persistable, small, string-only). There is no
+server.
+
+**Decision.** Define a versioned project format in `project.ts`
+(`silhouetter-project` v1): the document (which already carries mask data URLs and
+brush strokes) plus the referenced bitmaps, with object URLs converted to data URLs.
+Unreferenced sources are dropped to save space. `projectStorage.svelte.ts` stores
+named projects under `silhouetter.project.<name>` and exposes a reactive list.
+`actions.ts` orchestrates save/load/download/open; a **Project** menu in the toolbar
+(and `Ctrl`/`Cmd`+`S`) is the UI. Loading replaces the document through
+`store.load` (undoable) and reloads sources and mask caches.
+
+**Consequences.**
+- Projects survive reloads and move between machines via `.silhouetter.json`.
+- `localStorage` is per-browser with a ~5 MB quota; bitmaps are base64-inflated, so
+  large projects can exceed it. `QuotaExceededError` is caught and surfaced as a
+  clear "storage is full — delete a project or Download" message rather than a crash.
+- Masks are stored as data URLs (already the case) and strokes as metadata (0013),
+  so the format stays compact relative to a full raster snapshot.
+- The format is versioned; loading a newer version fails with an explicit message.
+
+---
+
+## 0015 — Project storage moved from localStorage to IndexedDB
+
+**Context.** ADR 0014 chose `localStorage` for named browser saves. In practice a
+single imported bitmap (e.g. `bg.jpeg`, ~1 MB) is stored as a base64 data URL
+(~1.4 M characters), and saving even one image could throw `QuotaExceededError`
+against the ~5 MB browser quota — reported by users as "storage is full" despite an
+empty store. Two images, or one image plus a segmentation mask, are guaranteed to
+overflow.
+
+**Decision.** Keep the named-project UX and file format, but back it with
+**IndexedDB** (`projectStorage.svelte.ts`), using two object stores (`projects` for
+the payload, `meta` for listing). IndexedDB structured-clones the data instead of
+stringifying it and has a far larger quota, so bitmaps no longer need base64
+inflation at rest. The `localStorage`-specific quota message is removed.
+
+**Consequences.**
+- Saving a normal project works, and image-heavy projects are limited by disk rather
+  than a ~5 MB string quota.
+- Storage functions are now async; `actions.ts` and `ProjectMenu.svelte` await them.
+- Tests use `fake-indexeddb` to exercise save/list/read/delete without a browser.
+- `localStorage` remains a poor fit for any future feature that stores image data;
+  prefer IndexedDB or the Origin Private File System (OPFS).
+
+

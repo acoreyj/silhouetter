@@ -15,6 +15,12 @@ import { drawInPixelSpace } from './geometry/transform';
 import { segmentForeground, type SegmentProgress } from './segment/segment';
 import { traceMask } from './vector/trace';
 import { THRESHOLD_AUTO } from '@cadit-app/potrace-ts';
+import { toProjectFile, fromProjectFile, PROJECT_EXTENSION } from './project';
+import {
+	saveProjectToStorage,
+	readProjectFromStorage,
+	deleteProjectFromStorage,
+} from './projectStorage.svelte';
 
 function triggerDownload(data: Blob | Uint8Array | string, filename: string, type: string): void {
 	const blob = data instanceof Blob ? data : new Blob([data as BlobPart], { type });
@@ -325,4 +331,63 @@ export function renderPreviewDataUrl(scale = 1): string {
 		canvas.height,
 	);
 	return (canvas as HTMLCanvasElement).toDataURL?.('image/png') ?? '';
+}
+
+/** Save the current project to browser storage under a name. Returns the name. */
+export async function saveProject(name?: string): Promise<string> {
+	const trimmed = (name ?? store.doc.name).trim() || 'Untitled';
+	store.doc.name = trimmed;
+	const project = await toProjectFile(store.snapshot(), store.sources);
+	project.name = trimmed;
+	saveProjectToStorage(trimmed, project);
+	return trimmed;
+}
+
+/** Download the current project as a `.silhouetter.json` file. */
+export async function downloadProject(): Promise<void> {
+	const project = await toProjectFile(store.snapshot(), store.sources);
+	const base = project.name.trim().replace(/[^\w.-]+/g, '_') || 'silhouetter';
+	triggerDownload(
+		JSON.stringify(project, null, 2),
+		`${base}.${PROJECT_EXTENSION}`,
+		'application/json',
+	);
+}
+
+/** Replace the current document and source registry with a parsed project. */
+async function applyProject(project: unknown): Promise<void> {
+	const { doc, sources } = fromProjectFile(project);
+	store.load(doc);
+	store.sources = {};
+	for (const source of Object.values(sources)) {
+		store.addSource(source);
+		await loadSource(source);
+	}
+	for (const layer of store.doc.layers) {
+		if (layer.kind === 'subject' && layer.maskDataUrl) await applyMaskStrokes(layer);
+		else if (layer.kind === 'mask') await applyMaskLayer(layer);
+	}
+	store.selectedId = null;
+}
+
+/** Load a project saved in browser storage. */
+export async function loadProject(name: string): Promise<void> {
+	await applyProject(await readProjectFromStorage(name));
+}
+
+/** Load a project from a user-selected file. */
+export async function openProject(file: File): Promise<void> {
+	const text = await file.text();
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(text);
+	} catch {
+		throw new Error('That file is not valid JSON.');
+	}
+	await applyProject(parsed);
+}
+
+/** Remove a project from browser storage. */
+export async function deleteProject(name: string): Promise<void> {
+	await deleteProjectFromStorage(name);
 }

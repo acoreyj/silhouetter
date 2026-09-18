@@ -7,6 +7,7 @@
 		downloadSvg,
 		downloadPng
 	} from '$lib/actions';
+	import ProjectMenu from './ProjectMenu.svelte';
 
 	let fileInput = $state<HTMLInputElement | undefined>(undefined);
 	let busy = $state(false);
@@ -70,6 +71,8 @@
 
 <div class="toolbar">
 	<div class="brand">Silhouetter</div>
+
+	<ProjectMenu />
 
 	<button onclick={() => fileInput?.click()} disabled={busy}>Import image</button>
 	<input
